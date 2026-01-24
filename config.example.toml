@@ -1,0 +1,57 @@
+# ParenVault Configuration Example
+# Copy to ~/.config/parenvault/config.toml and customize
+
+[device]
+# Unique device identifier (auto-generated on first run)
+# id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+name = "my-laptop"
+
+[database]
+# Local SQLite database for offline operation
+local_path = "~/.local/share/parenvault/parenvault.db"
+
+# Remote PostgreSQL database (via Tailscale)
+# Uncomment and configure for multi-device sync
+# remote_host = "your-server.tailnet-name.ts.net"
+# remote_port = 5432
+# remote_name = "parenvault"
+# remote_user = "parenvault"
+# remote_password = "your-secure-password"
+
+[mail]
+# aerc/maildir integration
+maildir_path = "~/Mail"
+inbox_folder = "INBOX"
+
+# Move emails to this folder to create tasks from them
+action_folder = "ParenVault"
+
+# Processed emails are moved here
+processed_folder = "ParenVault/Processed"
+
+# For composing task update emails
+drafts_folder = "Drafts"
+outbox_folder = "Outbox"
+
+[sync]
+# Automatic sync when remote is available
+auto_sync = true
+
+# Sync interval in seconds (default: 5 minutes)
+interval_secs = 300
+
+# Conflict resolution: "local_wins", "remote_wins", or "manual"
+# conflict_strategy = "remote_wins"
+
+[ui]
+# Color theme
+theme = "default"
+
+# Date format for display
+date_format = "%Y-%m-%d"
+
+# Show completed tasks in lists
+show_completed = false
+
+# Default view on startup: dashboard, tasks, notes, calendar, inbox
+default_view = "dashboard"

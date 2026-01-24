@@ -1,0 +1,12 @@
+(library
+ (name aerc)
+ (public_name parenvault.aerc)
+ (libraries 
+  domain 
+  storage
+  mrmime
+  lwt
+  lwt.unix
+  ptime
+  yojson)
+ (preprocess (pps lwt_ppx)))

@@ -1,0 +1,362 @@
+(** Database schema definitions and migrations *)
+
+open Lwt.Syntax
+
+(** Schema version *)
+let current_version = 1
+
+(** SQLite schema creation statements *)
+let sqlite_schema = {|
+-- Schema version tracking
+CREATE TABLE IF NOT EXISTS schema_version (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Device identity for sync
+CREATE TABLE IF NOT EXISTS device (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Projects/Areas
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  tags TEXT NOT NULL DEFAULT '[]',
+  parent_id TEXT REFERENCES projects(id),
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Tasks
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'inbox',
+  priority TEXT NOT NULL DEFAULT 'p2',
+  tags TEXT NOT NULL DEFAULT '[]',
+  due_date TEXT,
+  scheduled_date TEXT,
+  completed_at TEXT,
+  recurrence TEXT,
+  parent_id TEXT REFERENCES tasks(id),
+  project_id TEXT REFERENCES projects(id),
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Notes
+CREATE TABLE IF NOT EXISTS notes (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  tags TEXT NOT NULL DEFAULT '[]',
+  project_id TEXT REFERENCES projects(id),
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Events
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  start_time TEXT NOT NULL,
+  end_time TEXT,
+  location TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  recurrence TEXT,
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Contacts
+CREATE TABLE IF NOT EXISTS contacts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT,
+  notes TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Email references (aerc integration)
+CREATE TABLE IF NOT EXISTS email_refs (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL UNIQUE,
+  subject TEXT NOT NULL,
+  from_addr TEXT NOT NULL,
+  to_addrs TEXT NOT NULL DEFAULT '[]',
+  date TEXT NOT NULL,
+  maildir_path TEXT,
+  linked_task_id TEXT REFERENCES tasks(id),
+  linked_note_id TEXT REFERENCES notes(id),
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Links between entities
+CREATE TABLE IF NOT EXISTS links (
+  id TEXT PRIMARY KEY,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  link_type TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(source_type, source_id, target_type, target_id, link_type)
+);
+
+-- Sync queue for pending changes
+CREATE TABLE IF NOT EXISTS sync_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  operation TEXT NOT NULL,  -- 'insert', 'update', 'delete'
+  queued_at TEXT NOT NULL DEFAULT (datetime('now')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  UNIQUE(entity_type, entity_id)
+);
+
+-- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_email_refs_message_id ON email_refs(message_id);
+CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(queued_at);
+|}
+
+(** PostgreSQL schema (similar but with PostgreSQL-specific types) *)
+let postgres_schema = {|
+-- Schema version tracking
+CREATE TABLE IF NOT EXISTS schema_version (
+  version INTEGER PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Projects/Areas
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  tags JSONB NOT NULL DEFAULT '[]',
+  parent_id TEXT REFERENCES projects(id),
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Tasks
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'inbox',
+  priority TEXT NOT NULL DEFAULT 'p2',
+  tags JSONB NOT NULL DEFAULT '[]',
+  due_date TIMESTAMPTZ,
+  scheduled_date TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  recurrence TEXT,
+  parent_id TEXT REFERENCES tasks(id),
+  project_id TEXT REFERENCES projects(id),
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Notes
+CREATE TABLE IF NOT EXISTS notes (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  tags JSONB NOT NULL DEFAULT '[]',
+  project_id TEXT REFERENCES projects(id),
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Events
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  start_time TIMESTAMPTZ NOT NULL,
+  end_time TIMESTAMPTZ,
+  location TEXT,
+  tags JSONB NOT NULL DEFAULT '[]',
+  recurrence TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Contacts
+CREATE TABLE IF NOT EXISTS contacts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT,
+  notes TEXT,
+  tags JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Email references (aerc integration)
+CREATE TABLE IF NOT EXISTS email_refs (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL UNIQUE,
+  subject TEXT NOT NULL,
+  from_addr TEXT NOT NULL,
+  to_addrs JSONB NOT NULL DEFAULT '[]',
+  date TIMESTAMPTZ NOT NULL,
+  maildir_path TEXT,
+  linked_task_id TEXT REFERENCES tasks(id),
+  linked_note_id TEXT REFERENCES notes(id),
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Links between entities
+CREATE TABLE IF NOT EXISTS links (
+  id TEXT PRIMARY KEY,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  link_type TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+  UNIQUE(source_type, source_id, target_type, target_id, link_type)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_email_refs_message_id ON email_refs(message_id);
+|}
+
+(** Run schema migration on a connection *)
+let migrate_sqlite pool =
+  let exec_sql sql =
+    Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+      (* Split by semicolons and execute each statement *)
+      let statements = String.split_on_char ';' sql in
+      let rec exec_all = function
+        | [] -> Lwt.return (Ok ())
+        | stmt :: rest ->
+          let stmt = String.trim stmt in
+          if stmt = "" then exec_all rest
+          else
+            let query = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) stmt in
+            let* result = C.exec query () in
+            match result with
+            | Ok () -> exec_all rest
+            | Error e -> Lwt.return (Error e)
+      in
+      exec_all statements
+    )
+  in
+  exec_sql sqlite_schema
+
+let migrate_postgres pool =
+  let exec_sql sql =
+    Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+      let statements = String.split_on_char ';' sql in
+      let rec exec_all = function
+        | [] -> Lwt.return (Ok ())
+        | stmt :: rest ->
+          let stmt = String.trim stmt in
+          if stmt = "" then exec_all rest
+          else
+            let query = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) stmt in
+            let* result = C.exec query () in
+            match result with
+            | Ok () -> exec_all rest
+            | Error e -> Lwt.return (Error e)
+      in
+      exec_all statements
+    )
+  in
+  exec_sql postgres_schema

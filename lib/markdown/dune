@@ -1,0 +1,4 @@
+(library
+ (name markdown)
+ (public_name parenvault.markdown)
+ (libraries domain omd ptime str))

@@ -1,0 +1,10 @@
+(library
+ (name sync)
+ (public_name parenvault.sync)
+ (libraries 
+  domain 
+  storage
+  lwt
+  lwt.unix
+  digestif)
+ (preprocess (pps lwt_ppx)))

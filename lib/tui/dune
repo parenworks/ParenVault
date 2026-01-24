@@ -1,0 +1,14 @@
+(library
+ (name tui)
+ (public_name parenvault.tui)
+ (libraries 
+  domain 
+  storage 
+  sync
+  config
+  notty
+  notty.lwt
+  lwt
+  lwt.unix
+  ptime)
+ (preprocess (pps lwt_ppx)))

@@ -1,0 +1,4 @@
+(library
+ (name domain)
+ (public_name parenvault.domain)
+ (libraries ptime ptime.clock.os uuidm))

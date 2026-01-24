@@ -1,0 +1,17 @@
+(executable
+ (name main)
+ (public_name parenvault)
+ (libraries 
+  parenvault.domain
+  parenvault.storage
+  parenvault.sync
+  parenvault.tui
+  parenvault.aerc
+  parenvault.config
+  cmdliner
+  lwt
+  lwt.unix
+  notty
+  notty.lwt
+  uuidm)
+ (preprocess (pps lwt_ppx)))

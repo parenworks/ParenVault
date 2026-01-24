@@ -1,0 +1,28 @@
+# OCaml build artifacts
+_build/
+*.install
+*.merlin
+.merlin
+
+# Opam
+*.opam.locked
+
+# Editor
+*~
+\#*\#
+.#*
+*.swp
+.vscode/
+.idea/
+
+# Local data
+data/
+*.db
+*.sqlite
+
+# Config with secrets
+config.local.toml
+
+# OS
+.DS_Store
+Thumbs.db
