@@ -26,3 +26,4 @@ config.local.toml
 # OS
 .DS_Store
 Thumbs.db
+_opam/
