@@ -77,11 +77,19 @@ parenvault tui
 | `j/k` or `↑/↓` | Navigate up/down |
 | `Enter` | Open selected item |
 | `n` | Create new item |
+| `e` | Edit selected item |
 | `d` | Delete selected |
 | `x` | Toggle task status |
-| `s` | Trigger sync |
-| `1-5` | Switch views (Dashboard, Tasks, Notes, Calendar, Projects) |
+| `c` | Quick capture to Inbox |
+| `D` | Daily Note |
+| `L` | Link entities |
+| `t` | Templates |
+| `E` | Export |
+| `w` | Weekly Review |
+| `f` | Filter Tasks |
+| `1-6` | Switch views (Dashboard, Tasks, Notes, Calendar, Projects, Contacts) |
 | `0` | Inbox view |
+| `9` | Archive view |
 | `Esc` | Go back |
 | `q` | Quit |
 

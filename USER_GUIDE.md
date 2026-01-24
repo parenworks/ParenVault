@@ -19,8 +19,9 @@ dune exec parenvault -- tui
 ## Keyboard Shortcuts
 
 ### Global Navigation
+
 | Key | Action |
-|-----|--------|
+| --- | ------ |
 | `1` | Dashboard |
 | `2` | Tasks |
 | `3` | Notes |
@@ -29,13 +30,16 @@ dune exec parenvault -- tui
 | `6` | Contacts |
 | `0` | Inbox |
 | `9` | Archive |
+| `w` | Weekly Review |
+| `f` | Filter Tasks |
 | `/` | Search |
 | `q` | Quit |
 | `Esc` | Go back / Cancel |
 
 ### List Navigation
+
 | Key | Action |
-|-----|--------|
+| --- | ------ |
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
 | `g` | Go to first item |
@@ -43,31 +47,38 @@ dune exec parenvault -- tui
 | `Enter` | Open selected item |
 
 ### Actions
+
 | Key | Action |
-|-----|--------|
+| --- | ------ |
 | `n` | Create new item |
 | `e` | Edit selected item |
 | `d` | Delete (soft delete) |
 | `c` | Quick capture to Inbox |
 | `D` | Daily Note (create/open today's note) |
+| `L` | Link to another entity |
+| `t` | Open template picker |
+| `E` | Export (list view → picker, detail view → export item) |
 
 ### Task-Specific
+
 | Key | Action |
-|-----|--------|
+| --- | ------ |
 | `x` | Toggle task done/todo |
 | `a` | Add subtask (in task detail) |
 | `A` | Add attachment (in task/note detail) |
 | `o` | Open attachment |
 
 ### Archive View (`9`)
+
 | Key | Action |
-|-----|--------|
+| --- | ------ |
 | `r` | Restore selected item |
 | `d` | Permanently delete |
 
 ### Form Editing
+
 | Key | Action |
-|-----|--------|
+| --- | ------ |
 | `Tab` / `↓` | Next field |
 | `↑` | Previous field |
 | `←` / `→` | Change priority / toggle options |
@@ -75,9 +86,11 @@ dune exec parenvault -- tui
 | `Esc` | Cancel |
 
 ### Recurring Tasks/Events
+
 When editing recurrence, use these keys to toggle days:
+
 | Key | Day |
-|-----|-----|
+| --- | --- |
 | `M` | Monday |
 | `T` | Tuesday |
 | `W` | Wednesday |
@@ -134,11 +147,86 @@ Press `9` to view deleted items:
 - Press `d` to permanently delete
 
 ### Attachments
+
 In Task or Note detail view:
+
 - Press `A` to attach a file (enter full path)
 - Press `j/k` to navigate between attachments
 - Press `o` to open the selected attachment
 - Files are copied to `~/.local/share/parenvault/attachments/`
+
+### Linking
+
+Connect related entities together:
+
+- Press `L` from any detail view to open the link picker
+- Select a task, note, project, or contact to link
+- Press `Enter` to open a linked item
+- Press `d` to delete a link (when link is selected)
+- Links are bidirectional - visible from both ends
+
+### Time Blocking
+
+Assign specific time slots to tasks:
+
+- Edit a task and set "Block Start" and "Block End" fields
+- Format: `YYYY-MM-DD HH:MM` (e.g., `2026-01-24 09:00`)
+- Time blocks display in task detail with ⏰ icon
+
+### Weekly Review
+
+Press `w` to open the Weekly Review:
+
+- **Overdue**: Tasks past their due date (red)
+- **Due This Week**: Upcoming deadlines (yellow)
+- **Events This Week**: Scheduled events (cyan)
+- **Inbox**: Items needing processing (magenta)
+- **Completed**: Tasks finished this week (green)
+- Navigate with `j/k`, press `Enter` to open any item
+
+### Filters/Views
+
+Press `f` to filter tasks:
+
+- **Priority**: P0, P1, P2, P3
+- **Status**: Overdue, Due Today, Due This Week, Inbox
+- **Project**: Filter by project
+- **Tag**: All existing tags are listed for selection
+- Navigate with `j/k`, press `Enter` to apply filter
+- Press `Esc` to go back to filter picker or exit
+
+### Templates
+
+Press `t` to open the template picker:
+
+- From Notes view → Note templates
+- From other views → Task templates
+- Navigate with `j/k`, press `Enter` to create
+
+**Note Templates:**
+
+- Blank Note, Meeting Notes, Daily Standup, 1:1 Meeting, Project Plan, Retrospective
+
+**Task Templates:**
+
+- Blank Task, Bug Report, Feature Request, Code Review
+
+### Export
+
+Press `E` to export data:
+
+**From list views** → Opens export picker:
+
+- Tasks → Markdown, JSON, CSV
+- Notes → Markdown, JSON
+- Events → Markdown, JSON
+- All Data → JSON
+
+**From detail views** → Exports single item:
+
+- Task detail → `~/parenvault-export/task-{title}.md`
+- Note detail → `~/parenvault-export/note-{title}.md`
+- Event detail → `~/parenvault-export/event-{title}.md`
 
 ---
 

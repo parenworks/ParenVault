@@ -110,6 +110,12 @@ let render_header model =
     | ProjectEdit (Some _) -> "Edit Project"
     | Inbox -> "Inbox"
     | Archive -> "Archive"
+    | WeeklyReview -> "Weekly Review"
+    | FilterView None -> "Filter Tasks"
+    | FilterView (Some f) -> "Filtered: " ^ f
+    | TemplatePicker `Note -> "Note Templates"
+    | TemplatePicker `Task -> "Task Templates"
+    | ExportPicker -> "Export Data"
     | Search q -> "Search: " ^ q
     | LinkPicker _ -> "Link To..."
   in

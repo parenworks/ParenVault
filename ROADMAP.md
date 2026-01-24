@@ -17,9 +17,9 @@ A checklist of planned features for the ParenVault PKM application.
 
 ## Medium Priority (Workflow)
 
-- [ ] **Filters/Views** - Filter by tag, priority, date range, project
-- [ ] **Weekly Review** - Summary of completed tasks, upcoming deadlines
-- [ ] **Templates** - Predefined structures for common note/task types
+- [x] **Filters/Views** - Filter by tag, priority, date range, project (f key)
+- [x] **Weekly Review** - Summary of completed tasks, upcoming deadlines (w key)
+- [x] **Templates** - Predefined structures for common note/task types (t key)
 - [x] **Archive** - Hide completed items but keep them searchable
 - [x] **Subtasks/Checklists** - Nested tasks within a parent task
 - [x] **Time Blocking** - Assign time slots to tasks (Block Start/End fields in task form)
@@ -29,7 +29,7 @@ A checklist of planned features for the ParenVault PKM application.
 ## Nice to Have (Power User)
 
 - [ ] **Keyboard Macros** - Custom shortcuts for common actions
-- [ ] **Export** - Markdown, JSON, CSV export
+- [x] **Export** - Markdown, JSON, CSV export (E key)
 - [x] **Sync Status** - Indicators: ●=local, ⟳=pending, ✓=synced
 - [ ] **Undo/Redo** - Revert recent changes
 - [x] **Attachments** - Link files to notes/tasks
@@ -93,3 +93,8 @@ All initial sprint features are done:
 - [x] Bidirectional sync on startup (local ↔ remote PostgreSQL)
 - [x] Linking entities (`L` key to link, Enter to open linked item, `d` to delete link)
 - [x] Time Blocking (Block Start/End datetime fields in task form, displayed in task detail)
+- [x] Weekly Review (`w` key - shows overdue, due this week, events, inbox, completed)
+- [x] Filters/Views (`f` key - filter by tag, priority, project, status)
+- [x] Templates (`t` key - built-in templates for notes and tasks)
+- [x] Export (`E` key - export lists to MD/JSON/CSV, or single item from detail view)
+- [x] Centered UI (content centered horizontally and vertically)

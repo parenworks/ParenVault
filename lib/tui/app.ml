@@ -31,6 +31,12 @@ let render_header model width =
     | ProjectEdit (Some _) -> "Edit Project"
     | Inbox -> "Inbox"
     | Archive -> "Archive"
+    | WeeklyReview -> "Weekly Review"
+    | FilterView None -> "Filter Tasks"
+    | FilterView (Some f) -> "Filtered: " ^ f
+    | TemplatePicker `Note -> "Note Templates"
+    | TemplatePicker `Task -> "Task Templates"
+    | ExportPicker -> "Export Data"
     | Search q -> "Search: " ^ q
     | LinkPicker _ -> "Link To..."
   in
@@ -281,6 +287,522 @@ let render_dashboard model width =
     stats_line
   )
 
+(** Render weekly review - summary of tasks for the week *)
+let render_weekly_review model width =
+  let open Domain.Types in
+  let now = Ptime_clock.now () in
+  let today = Ptime.to_date now in
+  let (y, m, d) = today in
+  
+  (* Calculate start of week (Monday) and end of week (Sunday) *)
+  let weekday = Ptime.weekday now in
+  let days_since_monday = match weekday with
+    | `Mon -> 0 | `Tue -> 1 | `Wed -> 2 | `Thu -> 3 | `Fri -> 4 | `Sat -> 5 | `Sun -> 6
+  in
+  let week_start = match Ptime.of_date (y, m, d - days_since_monday) with
+    | Some t -> t | None -> now
+  in
+  let week_end = match Ptime.add_span week_start (Ptime.Span.of_int_s (7 * 24 * 3600)) with
+    | Some t -> t | None -> now
+  in
+  
+  (* Filter tasks into categories *)
+  let active_tasks = List.filter (fun (t : task) -> t.parent_id = None) model.tasks in
+  
+  (* Completed this week *)
+  let completed_this_week = List.filter (fun (t : task) -> 
+    t.status = Done && 
+    match t.completed_at with
+    | Some ts -> Ptime.is_later ts.time ~than:week_start && Ptime.is_earlier ts.time ~than:week_end
+    | None -> false
+  ) active_tasks in
+  
+  (* Overdue tasks *)
+  let overdue = List.filter (fun (t : task) ->
+    t.status <> Done &&
+    match t.due_date with
+    | Some ts -> Ptime.is_earlier ts.time ~than:now
+    | None -> false
+  ) active_tasks in
+  
+  (* Due this week (not overdue) *)
+  let due_this_week = List.filter (fun (t : task) ->
+    t.status <> Done &&
+    match t.due_date with
+    | Some ts -> 
+      not (Ptime.is_earlier ts.time ~than:now) && 
+      Ptime.is_earlier ts.time ~than:week_end
+    | None -> false
+  ) active_tasks in
+  
+  (* Inbox items *)
+  let inbox_items = List.filter (fun (t : task) -> t.status = Inbox) active_tasks in
+  
+  (* Events this week *)
+  let events_this_week = List.filter (fun (e : event) ->
+    Ptime.is_later e.start_time.time ~than:week_start &&
+    Ptime.is_earlier e.start_time.time ~than:week_end
+  ) model.events in
+  
+  (* Build flat list of all items for navigation *)
+  let all_items = 
+    List.map (fun t -> `Task t) overdue @
+    List.map (fun t -> `Task t) due_this_week @
+    List.map (fun e -> `Event e) events_this_week @
+    List.map (fun t -> `Task t) inbox_items @
+    List.map (fun t -> `Task t) completed_this_week
+  in
+  let num_items = List.length all_items in
+  let _ = num_items in (* suppress warning *)
+  
+  (* Track global index for selection *)
+  let current_idx = ref 0 in
+  let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+  
+  let format_date ts =
+    let (y, m, d) = Ptime.to_date ts.time in
+    Printf.sprintf "%02d-%s-%04d" d months.(m - 1) y
+  in
+  
+  let render_task_item (t : task) =
+    let selected = !current_idx = model.selected_index in
+    let idx = !current_idx in
+    current_idx := idx + 1;
+    let prefix = if selected then "  ▶ " else "    " in
+    let status_icon = match t.status with Done -> "✓" | _ -> "○" in
+    let priority_str = priority_to_string t.priority in
+    let due_str = match t.due_date with Some ts -> " 📅 " ^ format_date ts | None -> "" in
+    let attr = if selected then A.(fg white ++ st bold) else A.(fg (gray 14)) in
+    I.string attr (Printf.sprintf "%s%s [%s] %s%s" prefix status_icon priority_str t.title due_str)
+  in
+  
+  let render_event_item (e : event) =
+    let selected = !current_idx = model.selected_index in
+    let idx = !current_idx in
+    current_idx := idx + 1;
+    let prefix = if selected then "  ▶ " else "    " in
+    let date_str = format_date e.start_time in
+    let tz_offset_s = Ptime.Span.of_int_s (3 * 3600) in
+    let local_time = Ptime.add_span e.start_time.time tz_offset_s |> Option.value ~default:e.start_time.time in
+    let time_str = Ptime.to_date_time local_time |> fun (_, ((h, m, _), _)) -> Printf.sprintf "%02d:%02d" h m in
+    let attr = if selected then A.(fg white ++ st bold) else A.(fg (gray 14)) in
+    I.string attr (Printf.sprintf "%s📅 %s %s  %s" prefix date_str time_str e.title)
+  in
+  
+  (* Render sections *)
+  let overdue_section = 
+    if overdue = [] then I.empty
+    else I.(
+      string A.(st bold ++ fg red) (Printf.sprintf "  ⚠️  OVERDUE (%d)" (List.length overdue)) <->
+      vcat (List.map render_task_item overdue) <->
+      void 0 1
+    )
+  in
+  
+  let due_section =
+    if due_this_week = [] then I.empty
+    else I.(
+      string A.(st bold ++ fg yellow) (Printf.sprintf "  📅 DUE THIS WEEK (%d)" (List.length due_this_week)) <->
+      vcat (List.map render_task_item due_this_week) <->
+      void 0 1
+    )
+  in
+  
+  let events_section =
+    if events_this_week = [] then I.empty
+    else I.(
+      string A.(st bold ++ fg cyan) (Printf.sprintf "  🗓️  EVENTS THIS WEEK (%d)" (List.length events_this_week)) <->
+      vcat (List.map render_event_item events_this_week) <->
+      void 0 1
+    )
+  in
+  
+  let inbox_section =
+    if inbox_items = [] then I.empty
+    else I.(
+      string A.(st bold ++ fg magenta) (Printf.sprintf "  📥 INBOX - NEEDS PROCESSING (%d)" (List.length inbox_items)) <->
+      vcat (List.map render_task_item inbox_items) <->
+      void 0 1
+    )
+  in
+  
+  let completed_section =
+    if completed_this_week = [] then I.empty
+    else I.(
+      string A.(st bold ++ fg green) (Printf.sprintf "  ✅ COMPLETED THIS WEEK (%d)" (List.length completed_this_week)) <->
+      vcat (List.map render_task_item completed_this_week) <->
+      void 0 1
+    )
+  in
+  
+  let sep_width = min width 60 in
+  let separator = I.string A.(fg (gray 12)) (String.make sep_width '-') in
+  
+  I.(
+    void 0 1 <->
+    string A.(st bold ++ fg white) "  📋 WEEKLY REVIEW" <->
+    separator <->
+    void 0 1 <->
+    overdue_section <->
+    due_section <->
+    events_section <->
+    inbox_section <->
+    completed_section <->
+    (if num_items = 0 then string A.(fg green) "  🎉 All caught up! Nothing to review." else empty)
+  )
+
+(** Built-in templates *)
+let note_templates = [
+  ("blank", "Blank Note", "", []);
+  ("meeting", "Meeting Notes", "## Attendees\n- \n\n## Agenda\n- \n\n## Discussion\n\n## Action Items\n- [ ] \n\n## Next Steps\n", ["meeting"]);
+  ("standup", "Daily Standup", "## Yesterday\n- \n\n## Today\n- \n\n## Blockers\n- \n", ["standup"; "daily"]);
+  ("1on1", "1:1 Meeting", "## Updates\n- \n\n## Feedback\n- \n\n## Goals Progress\n- \n\n## Action Items\n- [ ] \n", ["1on1"; "meeting"]);
+  ("project", "Project Plan", "## Overview\n\n## Goals\n- \n\n## Milestones\n- [ ] \n\n## Resources\n- \n\n## Risks\n- \n", ["project"; "planning"]);
+  ("retro", "Retrospective", "## What Went Well\n- \n\n## What Could Improve\n- \n\n## Action Items\n- [ ] \n", ["retro"; "meeting"]);
+]
+
+let task_templates = [
+  ("blank", "Blank Task", "", []);
+  ("bug", "Bug Report", "## Description\n\n## Steps to Reproduce\n1. \n\n## Expected Behavior\n\n## Actual Behavior\n\n## Environment\n", ["bug"]);
+  ("feature", "Feature Request", "## Description\n\n## User Story\nAs a [user], I want [feature] so that [benefit].\n\n## Acceptance Criteria\n- [ ] \n", ["feature"]);
+  ("review", "Code Review", "## PR/MR Link\n\n## Changes Summary\n\n## Testing Done\n- [ ] \n\n## Notes\n", ["review"]);
+]
+
+(** Export options *)
+let export_options = [
+  ("tasks-md", "📋 Tasks → Markdown");
+  ("tasks-json", "📋 Tasks → JSON");
+  ("tasks-csv", "📋 Tasks → CSV");
+  ("notes-md", "📝 Notes → Markdown");
+  ("notes-json", "📝 Notes → JSON");
+  ("events-md", "📅 Events → Markdown");
+  ("events-json", "📅 Events → JSON");
+  ("all-json", "📦 All Data → JSON");
+]
+
+(** Export functions *)
+let export_tasks_markdown tasks =
+  let open Domain.Types in
+  let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+  let format_date ts = let (y, m, d) = Ptime.to_date ts.time in Printf.sprintf "%02d-%s-%04d" d months.(m-1) y in
+  let lines = List.map (fun (t : task) ->
+    let status_mark = if t.status = Done then "x" else " " in
+    let priority = priority_to_string t.priority in
+    let due = match t.due_date with Some ts -> " 📅 " ^ format_date ts | None -> "" in
+    let tags = if t.tags = [] then "" else " [" ^ String.concat ", " t.tags ^ "]" in
+    let desc = match t.description with Some d when d <> "" -> "\n  " ^ d | _ -> "" in
+    Printf.sprintf "- [%s] **%s** [%s]%s%s%s" status_mark t.title priority due tags desc
+  ) tasks in
+  "# Tasks\n\n" ^ String.concat "\n" lines
+
+let export_tasks_json tasks =
+  let open Domain.Types in
+  let task_to_json (t : task) =
+    `Assoc [
+      ("id", `String t.id);
+      ("title", `String t.title);
+      ("description", match t.description with Some d -> `String d | None -> `Null);
+      ("status", `String (task_status_to_string t.status));
+      ("priority", `String (priority_to_string t.priority));
+      ("tags", `List (List.map (fun s -> `String s) t.tags));
+    ]
+  in
+  Yojson.Safe.pretty_to_string (`List (List.map task_to_json tasks))
+
+let export_tasks_csv tasks =
+  let open Domain.Types in
+  let header = "id,title,status,priority,tags,due_date" in
+  let rows = List.map (fun (t : task) ->
+    let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+    let due = match t.due_date with Some ts -> let (y,m,d) = Ptime.to_date ts.time in Printf.sprintf "%02d-%s-%04d" d months.(m-1) y | None -> "" in
+    Printf.sprintf "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\""
+      t.id (String.escaped t.title) (task_status_to_string t.status) (priority_to_string t.priority) (String.concat ";" t.tags) due
+  ) tasks in
+  header ^ "\n" ^ String.concat "\n" rows
+
+let export_notes_markdown notes =
+  let open Domain.Types in
+  let lines = List.map (fun (n : note) ->
+    let tags = if n.tags = [] then "" else " [" ^ String.concat ", " n.tags ^ "]" in
+    Printf.sprintf "## %s%s\n\n%s\n" n.title tags n.content
+  ) notes in
+  "# Notes\n\n" ^ String.concat "\n---\n\n" lines
+
+let export_notes_json notes =
+  let open Domain.Types in
+  let note_to_json (n : note) =
+    `Assoc [
+      ("id", `String n.id);
+      ("title", `String n.title);
+      ("content", `String n.content);
+      ("tags", `List (List.map (fun s -> `String s) n.tags));
+    ]
+  in
+  Yojson.Safe.pretty_to_string (`List (List.map note_to_json notes))
+
+let export_events_markdown events =
+  let open Domain.Types in
+  let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+  let lines = List.map (fun (e : event) ->
+    let (y, m, d) = Ptime.to_date e.start_time.time in
+    let date = Printf.sprintf "%02d-%s-%04d" d months.(m-1) y in
+    let loc = match e.location with Some l -> " @ " ^ l | None -> "" in
+    Printf.sprintf "- **%s** - %s%s" e.title date loc
+  ) events in
+  "# Events\n\n" ^ String.concat "\n" lines
+
+let export_events_json events =
+  let open Domain.Types in
+  let event_to_json (e : event) =
+    `Assoc [
+      ("id", `String e.id);
+      ("title", `String e.title);
+      ("location", match e.location with Some l -> `String l | None -> `Null);
+    ]
+  in
+  Yojson.Safe.pretty_to_string (`List (List.map event_to_json events))
+
+(** Export single task detail *)
+let export_task_detail (task : Domain.Types.task) =
+  let open Domain.Types in
+  let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+  let format_date ts = let (y, m, d) = Ptime.to_date ts.time in Printf.sprintf "%02d-%s-%04d" d months.(m-1) y in
+  let status_str = task_status_to_string task.status in
+  let priority_str = priority_to_string task.priority in
+  let due = match task.due_date with Some ts -> format_date ts | None -> "Not set" in
+  let scheduled = match task.scheduled_date with Some ts -> format_date ts | None -> "Not set" in
+  let tags = if task.tags = [] then "None" else String.concat ", " task.tags in
+  let recurrence = match task.recurrence with Some r -> r | None -> "None" in
+  let block_start = match task.block_start with Some ts -> format_date ts | None -> "Not set" in
+  let block_end = match task.block_end with Some ts -> format_date ts | None -> "Not set" in
+  let desc = match task.description with Some d when d <> "" -> d | _ -> "No description" in
+  Printf.sprintf {|# %s
+
+## Details
+
+| Field | Value |
+|-------|-------|
+| Status | %s |
+| Priority | %s |
+| Due Date | %s |
+| Scheduled | %s |
+| Tags | %s |
+| Recurrence | %s |
+| Block Start | %s |
+| Block End | %s |
+
+## Description
+
+%s
+|} task.title status_str priority_str due scheduled tags recurrence block_start block_end desc
+
+(** Export single note detail *)
+let export_note_detail (note : Domain.Types.note) =
+  let tags = if note.tags = [] then "None" else String.concat ", " note.tags in
+  Printf.sprintf {|# %s
+
+**Tags:** %s
+
+---
+
+%s
+|} note.title tags note.content
+
+(** Export single event detail *)
+let export_event_detail (event : Domain.Types.event) =
+  let open Domain.Types in
+  let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+  let (y, m, d) = Ptime.to_date event.start_time.time in
+  let date_str = Printf.sprintf "%02d-%s-%04d" d months.(m-1) y in
+  let location = match event.location with Some l -> l | None -> "Not set" in
+  let recurrence = match event.recurrence with Some r -> r | None -> "None" in
+  let desc = match event.description with Some d when d <> "" -> d | _ -> "No description" in
+  Printf.sprintf {|# %s
+
+## Details
+
+| Field | Value |
+|-------|-------|
+| Date | %s |
+| Location | %s |
+| Recurrence | %s |
+
+## Description
+
+%s
+|} event.title date_str location recurrence desc
+
+let export_all_json model =
+  let tasks_json = `List (List.map (fun (t : Domain.Types.task) ->
+    `Assoc [("id", `String t.id); ("title", `String t.title); ("type", `String "task")]
+  ) model.Model.tasks) in
+  let notes_json = `List (List.map (fun (n : Domain.Types.note) ->
+    `Assoc [("id", `String n.id); ("title", `String n.title); ("type", `String "note")]
+  ) model.notes) in
+  let events_json = `List (List.map (fun (e : Domain.Types.event) ->
+    `Assoc [("id", `String e.id); ("title", `String e.title); ("type", `String "event")]
+  ) model.events) in
+  Yojson.Safe.pretty_to_string (`Assoc [
+    ("tasks", tasks_json);
+    ("notes", notes_json);
+    ("events", events_json);
+  ])
+
+(** Render export picker *)
+let render_export_picker model width =
+  let option_lines = List.mapi (fun i (_, display) ->
+    let selected = i = model.selected_index in
+    let prefix = if selected then "  ▶ " else "    " in
+    let attr = if selected then A.(fg white ++ st bold) else A.(fg (gray 14)) in
+    I.string attr (prefix ^ display)
+  ) export_options in
+  let sep_width = min width 60 in
+  let separator = I.string A.(fg (gray 12)) (String.make sep_width '-') in
+  I.(
+    void 0 1 <->
+    string A.(st bold ++ fg cyan) "  📤 EXPORT DATA" <->
+    separator <->
+    void 0 1 <->
+    string A.(fg (gray 12)) "  Select format to export:" <->
+    void 0 1 <->
+    vcat option_lines <->
+    void 0 1 <->
+    string A.(fg (gray 10)) "  Files saved to ~/parenvault-export/"
+  )
+
+(** Render template picker *)
+let render_template_picker model width template_type =
+  let templates = match template_type with
+    | `Note -> note_templates
+    | `Task -> task_templates
+  in
+  let type_str = match template_type with `Note -> "Note" | `Task -> "Task" in
+  let template_lines = List.mapi (fun i (_, name, _, tags) ->
+    let selected = i = model.selected_index in
+    let prefix = if selected then "  ▶ " else "    " in
+    let attr = if selected then A.(fg white ++ st bold) else A.(fg (gray 14)) in
+    let tags_str = if tags = [] then "" else " [" ^ String.concat ", " tags ^ "]" in
+    I.string attr (prefix ^ name ^ tags_str)
+  ) templates in
+  let sep_width = min width 60 in
+  let separator = I.string A.(fg (gray 12)) (String.make sep_width '-') in
+  I.(
+    void 0 1 <->
+    string A.(st bold ++ fg cyan) ("  📋 SELECT " ^ String.uppercase_ascii type_str ^ " TEMPLATE") <->
+    separator <->
+    void 0 1 <->
+    vcat template_lines <->
+    void 0 1 <->
+    string A.(fg (gray 10)) "  Press Enter to create, Esc to cancel"
+  )
+
+(** Render filter view - show filter options and all existing tags *)
+let render_filter_view model width filter_opt =
+  let open Domain.Types in
+  
+  (* Collect all unique tags from tasks and notes *)
+  let task_tags = List.concat_map (fun (t : task) -> t.tags) model.tasks in
+  let note_tags = List.concat_map (fun (n : note) -> n.tags) model.notes in
+  let all_tags = task_tags @ note_tags in
+  let unique_tags = List.sort_uniq String.compare all_tags in
+  
+  (* Get all projects for project filter *)
+  let projects = model.projects in
+  
+  (* Build filter options list *)
+  let filter_options = 
+    (* Priority filters *)
+    [("priority:P0", "🔴 Priority P0 (Critical)");
+     ("priority:P1", "🟠 Priority P1 (High)");
+     ("priority:P2", "🟡 Priority P2 (Normal)");
+     ("priority:P3", "🟢 Priority P3 (Low)");
+     ("status:overdue", "⚠️  Overdue Tasks");
+     ("status:today", "📅 Due Today");
+     ("status:week", "🗓️  Due This Week");
+     ("status:inbox", "📥 Inbox Items")] @
+    (* Project filters *)
+    List.map (fun (p : project) -> ("project:" ^ p.id, "📁 Project: " ^ p.name)) projects @
+    (* Tag filters *)
+    List.map (fun tag -> ("tag:" ^ tag, "🏷️  Tag: " ^ tag)) unique_tags
+  in
+  
+  match filter_opt with
+  | None ->
+    (* Show filter picker *)
+    let num_options = List.length filter_options in
+    let option_lines = List.mapi (fun i (_, display) ->
+      let selected = i = model.selected_index in
+      let prefix = if selected then "  ▶ " else "    " in
+      let attr = if selected then A.(fg white ++ st bold) else A.(fg (gray 14)) in
+      I.string attr (prefix ^ display)
+    ) filter_options in
+    let _ = num_options in
+    let sep_width = min width 60 in
+    let separator = I.string A.(fg (gray 12)) (String.make sep_width '-') in
+    I.(
+      void 0 1 <->
+      string A.(st bold ++ fg cyan) "  🔍 FILTER TASKS" <->
+      separator <->
+      void 0 1 <->
+      string A.(fg (gray 12)) "  Select a filter to view matching tasks:" <->
+      void 0 1 <->
+      vcat option_lines <->
+      void 0 1 <->
+      string A.(fg (gray 10)) (Printf.sprintf "  Available tags: %d | Projects: %d" (List.length unique_tags) (List.length projects))
+    )
+  | Some filter_str ->
+    (* Show filtered results *)
+    let filtered_tasks = 
+      if String.length filter_str > 4 && String.sub filter_str 0 4 = "tag:" then
+        let tag = String.sub filter_str 4 (String.length filter_str - 4) in
+        List.filter (fun (t : task) -> List.mem tag t.tags) model.tasks
+      else if String.length filter_str > 9 && String.sub filter_str 0 9 = "priority:" then
+        let p_str = String.sub filter_str 9 (String.length filter_str - 9) in
+        let priority = priority_of_string p_str in
+        List.filter (fun (t : task) -> match priority with Some p -> t.priority = p | None -> false) model.tasks
+      else if String.length filter_str > 8 && String.sub filter_str 0 8 = "project:" then
+        let proj_id = String.sub filter_str 8 (String.length filter_str - 8) in
+        List.filter (fun (t : task) -> t.project_id = Some proj_id) model.tasks
+      else if filter_str = "status:overdue" then
+        let now = Ptime_clock.now () in
+        List.filter (fun (t : task) -> t.status <> Done && match t.due_date with Some ts -> Ptime.is_earlier ts.time ~than:now | None -> false) model.tasks
+      else if filter_str = "status:today" then
+        let today = Ptime.to_date (Ptime_clock.now ()) in
+        List.filter (fun (t : task) -> match t.due_date with Some ts -> Ptime.to_date ts.time = today | None -> false) model.tasks
+      else if filter_str = "status:week" then
+        let now = Ptime_clock.now () in
+        let week_end = match Ptime.add_span now (Ptime.Span.of_int_s (7 * 24 * 3600)) with Some t -> t | None -> now in
+        List.filter (fun (t : task) -> t.status <> Done && match t.due_date with Some ts -> Ptime.is_earlier ts.time ~than:week_end | None -> false) model.tasks
+      else if filter_str = "status:inbox" then
+        List.filter (fun (t : task) -> t.status = Inbox) model.tasks
+      else
+        model.tasks
+    in
+    let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+    let task_lines = List.mapi (fun i (t : task) ->
+      let selected = i = model.selected_index in
+      let prefix = if selected then "  ▶ " else "    " in
+      let status_icon = match t.status with Done -> "✓" | _ -> "○" in
+      let priority_str = priority_to_string t.priority in
+      let due_str = match t.due_date with 
+        | Some ts -> let (y, m, d) = Ptime.to_date ts.time in Printf.sprintf " 📅 %02d-%s-%04d" d months.(m-1) y 
+        | None -> "" 
+      in
+      let attr = if selected then A.(fg white ++ st bold) else A.(fg (gray 14)) in
+      I.string attr (Printf.sprintf "%s%s [%s] %s%s" prefix status_icon priority_str t.title due_str)
+    ) filtered_tasks in
+    let sep_width = min width 60 in
+    let separator = I.string A.(fg (gray 12)) (String.make sep_width '-') in
+    I.(
+      void 0 1 <->
+      string A.(st bold ++ fg cyan) ("  🔍 FILTERED: " ^ filter_str) <->
+      separator <->
+      void 0 1 <->
+      string A.(fg (gray 12)) (Printf.sprintf "  %d tasks match this filter" (List.length filtered_tasks)) <->
+      void 0 1 <->
+      (if filtered_tasks = [] then string A.(fg yellow) "  No tasks match this filter" else vcat task_lines)
+    )
+
 (** Render footer/status bar *)
 let render_footer model term_width =
   let mode_str = match model.input_mode with
@@ -298,9 +820,14 @@ let render_footer model term_width =
     | ContactList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | Projects -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | Archive -> "j/k:nav r:restore d:delete Esc:back | " ^ nav_hint
-    | TaskDetail _ -> "e:edit a:subtask A:attach L:link o:open d:del Esc:back | " ^ nav_hint
-    | NoteDetail _ -> "e:edit A:attach L:link o:open d:del Esc:back | " ^ nav_hint
-    | EventDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
+    | WeeklyReview -> "j/k:nav Enter:open x:toggle Esc:back | " ^ nav_hint
+    | FilterView None -> "j/k:nav Enter:select Esc:back | " ^ nav_hint
+    | FilterView (Some _) -> "j/k:nav Enter:open x:toggle Esc:back | " ^ nav_hint
+    | TemplatePicker _ -> "j/k:nav Enter:create Esc:cancel | " ^ nav_hint
+    | ExportPicker -> "j/k:nav Enter:export Esc:cancel | " ^ nav_hint
+    | TaskDetail _ -> "e:edit a:subtask A:attach L:link o:open E:export d:del Esc:back | " ^ nav_hint
+    | NoteDetail _ -> "e:edit A:attach L:link o:open E:export d:del Esc:back | " ^ nav_hint
+    | EventDetail _ -> "e:edit L:link E:export d:del Esc:back | " ^ nav_hint
     | ContactDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
     | ProjectDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
     | TaskEdit _ | NoteEdit _ | EventEdit _ | ContactEdit _ | ProjectEdit _ -> "Tab/↓:next ↑:prev Enter:save Esc:cancel"
@@ -432,6 +959,10 @@ let render model (width, height) =
   let content_height = height - 4 in
   let content = match model.view with
     | Dashboard -> render_dashboard model width
+    | WeeklyReview -> render_weekly_review model width
+    | FilterView filter_opt -> render_filter_view model width filter_opt
+    | TemplatePicker template_type -> render_template_picker model width template_type
+    | ExportPicker -> render_export_picker model width
     | TaskList | Inbox -> render_task_list model width height
     | NoteList -> render_note_list model width height
     | TaskDetail id ->
@@ -836,8 +1367,16 @@ let render model (width, height) =
       ) items in
       I.vcat ([header_line; type_hint; I.void 0 1] @ item_lines)
   in
-  let content_area = I.vsnap ~align:`Top content_height content in
-  I.(header <-> content_area <-> footer)
+  (* Center content vertically if there's extra space *)
+  let content_img_height = I.height content in
+  let top_padding = if content_img_height < content_height then (content_height - content_img_height) / 3 else 0 in
+  let content_with_vpad = if top_padding > 0 then I.(void 0 top_padding <-> content) else content in
+  let content_area = I.vsnap ~align:`Top content_height content_with_vpad in
+  (* Center content horizontally if terminal is wide enough *)
+  let max_content_width = 80 in
+  let left_padding = if width > max_content_width then (width - max_content_width) / 2 else 0 in
+  let centered_content = if left_padding > 0 then I.(void left_padding 0 <|> content_area) else content_area in
+  I.(header <-> centered_content <-> footer)
 
 (** Handle keyboard input *)
 let handle_key model key =
@@ -895,6 +1434,47 @@ let handle_key model key =
          `Continue { model with link_index = new_idx }
        else
          `Continue model
+     | WeeklyReview ->
+       (* Navigate items in weekly review - need to calculate total items *)
+       let open Domain.Types in
+       let now = Ptime_clock.now () in
+       let today = Ptime.to_date now in
+       let (y, m, d) = today in
+       let weekday = Ptime.weekday now in
+       let days_since_monday = match weekday with
+         | `Mon -> 0 | `Tue -> 1 | `Wed -> 2 | `Thu -> 3 | `Fri -> 4 | `Sat -> 5 | `Sun -> 6
+       in
+       let week_start = match Ptime.of_date (y, m, d - days_since_monday) with Some t -> t | None -> now in
+       let week_end = match Ptime.add_span week_start (Ptime.Span.of_int_s (7 * 24 * 3600)) with Some t -> t | None -> now in
+       let active_tasks = List.filter (fun (t : task) -> t.parent_id = None) model.tasks in
+       let completed = List.filter (fun (t : task) -> t.status = Done && match t.completed_at with Some ts -> Ptime.is_later ts.time ~than:week_start && Ptime.is_earlier ts.time ~than:week_end | None -> false) active_tasks in
+       let overdue = List.filter (fun (t : task) -> t.status <> Done && match t.due_date with Some ts -> Ptime.is_earlier ts.time ~than:now | None -> false) active_tasks in
+       let due_week = List.filter (fun (t : task) -> t.status <> Done && match t.due_date with Some ts -> not (Ptime.is_earlier ts.time ~than:now) && Ptime.is_earlier ts.time ~than:week_end | None -> false) active_tasks in
+       let inbox = List.filter (fun (t : task) -> t.status = Inbox) active_tasks in
+       let events_week = List.filter (fun (e : event) -> Ptime.is_later e.start_time.time ~than:week_start && Ptime.is_earlier e.start_time.time ~than:week_end) model.events in
+       let num_items = List.length overdue + List.length due_week + List.length events_week + List.length inbox + List.length completed in
+       let new_idx = min (model.selected_index + 1) (num_items - 1) in
+       `Continue { model with selected_index = max 0 new_idx }
+     | FilterView None ->
+       (* Navigate filter options *)
+       let open Domain.Types in
+       let task_tags = List.concat_map (fun (t : task) -> t.tags) model.tasks in
+       let note_tags = List.concat_map (fun (n : note) -> n.tags) model.notes in
+       let unique_tags = List.sort_uniq String.compare (task_tags @ note_tags) in
+       let num_options = 8 + List.length model.projects + List.length unique_tags in
+       let new_idx = min (model.selected_index + 1) (num_options - 1) in
+       `Continue { model with selected_index = max 0 new_idx }
+     | FilterView (Some _) ->
+       (* Navigate filtered results - just use task count *)
+       let new_idx = min (model.selected_index + 1) (List.length model.tasks - 1) in
+       `Continue { model with selected_index = max 0 new_idx }
+     | TemplatePicker template_type ->
+       let templates = match template_type with `Note -> note_templates | `Task -> task_templates in
+       let new_idx = min (model.selected_index + 1) (List.length templates - 1) in
+       `Continue { model with selected_index = max 0 new_idx }
+     | ExportPicker ->
+       let new_idx = min (model.selected_index + 1) (List.length export_options - 1) in
+       `Continue { model with selected_index = max 0 new_idx }
      | _ -> `Continue (update model SelectNext))
   | `ASCII 'k' | `Arrow `Up when model.input_mode = Normal -> 
     (match model.view with
@@ -936,6 +1516,18 @@ let handle_key model key =
          `Continue { model with link_index = new_idx }
        else
          `Continue model
+     | WeeklyReview ->
+       let new_idx = max 0 (model.selected_index - 1) in
+       `Continue { model with selected_index = new_idx }
+     | FilterView _ ->
+       let new_idx = max 0 (model.selected_index - 1) in
+       `Continue { model with selected_index = new_idx }
+     | TemplatePicker _ ->
+       let new_idx = max 0 (model.selected_index - 1) in
+       `Continue { model with selected_index = new_idx }
+     | ExportPicker ->
+       let new_idx = max 0 (model.selected_index - 1) in
+       `Continue { model with selected_index = new_idx }
      | _ -> `Continue (update model SelectPrev))
   | `ASCII 'g' when model.input_mode = Normal -> 
     `Continue (update model SelectFirst)
@@ -1035,6 +1627,60 @@ let handle_key model key =
     `Continue (update model (Navigate Inbox))
   | `ASCII '9' when model.input_mode = Normal -> 
     `Continue (update model (Navigate Archive))
+  | `ASCII 'w' when model.input_mode = Normal -> 
+    `Continue { model with view = WeeklyReview; selected_index = 0; previous_views = model.view :: model.previous_views }
+  | `ASCII 'f' when model.input_mode = Normal -> 
+    `Continue { model with view = FilterView None; selected_index = 0; previous_views = model.view :: model.previous_views }
+  | `ASCII 't' when model.input_mode = Normal ->
+    (* Open template picker based on current view *)
+    let template_type = match model.view with
+      | NoteList | NoteDetail _ -> `Note
+      | _ -> `Task
+    in
+    `Continue { model with view = TemplatePicker template_type; selected_index = 0; previous_views = model.view :: model.previous_views }
+  | `ASCII 'E' when model.input_mode = Normal ->
+    (* Export: from detail view exports single item, otherwise opens export picker *)
+    (match model.view with
+     | TaskDetail id ->
+       (match List.find_opt (fun (t : Domain.Types.task) -> t.id = id) model.tasks with
+        | Some task ->
+          let home = Sys.getenv_opt "HOME" |> Option.value ~default:"." in
+          let export_dir = home ^ "/parenvault-export" in
+          (try Unix.mkdir export_dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+          let safe_title = String.map (fun c -> if c = ' ' || c = '/' then '-' else c) task.title in
+          let filepath = export_dir ^ "/task-" ^ safe_title ^ ".md" in
+          let oc = open_out filepath in
+          output_string oc (export_task_detail task);
+          close_out oc;
+          `Continue { model with status = Some { text = "Exported to " ^ filepath; level = `Success; expires_at = None } }
+        | None -> `Continue model)
+     | NoteDetail id ->
+       (match List.find_opt (fun (n : Domain.Types.note) -> n.id = id) model.notes with
+        | Some note ->
+          let home = Sys.getenv_opt "HOME" |> Option.value ~default:"." in
+          let export_dir = home ^ "/parenvault-export" in
+          (try Unix.mkdir export_dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+          let safe_title = String.map (fun c -> if c = ' ' || c = '/' then '-' else c) note.title in
+          let filepath = export_dir ^ "/note-" ^ safe_title ^ ".md" in
+          let oc = open_out filepath in
+          output_string oc (export_note_detail note);
+          close_out oc;
+          `Continue { model with status = Some { text = "Exported to " ^ filepath; level = `Success; expires_at = None } }
+        | None -> `Continue model)
+     | EventDetail id ->
+       (match List.find_opt (fun (e : Domain.Types.event) -> e.id = id) model.events with
+        | Some event ->
+          let home = Sys.getenv_opt "HOME" |> Option.value ~default:"." in
+          let export_dir = home ^ "/parenvault-export" in
+          (try Unix.mkdir export_dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+          let safe_title = String.map (fun c -> if c = ' ' || c = '/' then '-' else c) event.title in
+          let filepath = export_dir ^ "/event-" ^ safe_title ^ ".md" in
+          let oc = open_out filepath in
+          output_string oc (export_event_detail event);
+          close_out oc;
+          `Continue { model with status = Some { text = "Exported to " ^ filepath; level = `Success; expires_at = None } }
+        | None -> `Continue model)
+     | _ -> `Continue { model with view = ExportPicker; selected_index = 0; previous_views = model.view :: model.previous_views })
   | `ASCII 'r' when model.input_mode = Normal -> 
     `Continue (update model RestoreSelected)
   | `Page `Down -> 
@@ -1828,6 +2474,168 @@ let run ~config () =
              | None -> 
                Printf.eprintf "No item found at index %d\n%!" model.selected_index;
                loop model)
+          | WeeklyReview, Some p ->
+            (* Open selected item from weekly review *)
+            let open Domain.Types in
+            let now = Ptime_clock.now () in
+            let today = Ptime.to_date now in
+            let (y, m, d) = today in
+            let weekday = Ptime.weekday now in
+            let days_since_monday = match weekday with
+              | `Mon -> 0 | `Tue -> 1 | `Wed -> 2 | `Thu -> 3 | `Fri -> 4 | `Sat -> 5 | `Sun -> 6
+            in
+            let week_start = match Ptime.of_date (y, m, d - days_since_monday) with
+              | Some t -> t | None -> now
+            in
+            let week_end = match Ptime.add_span week_start (Ptime.Span.of_int_s (7 * 24 * 3600)) with
+              | Some t -> t | None -> now
+            in
+            let active_tasks = List.filter (fun (t : task) -> t.parent_id = None) model.tasks in
+            let completed_this_week = List.filter (fun (t : task) -> 
+              t.status = Done && match t.completed_at with
+              | Some ts -> Ptime.is_later ts.time ~than:week_start && Ptime.is_earlier ts.time ~than:week_end
+              | None -> false
+            ) active_tasks in
+            let overdue = List.filter (fun (t : task) ->
+              t.status <> Done && match t.due_date with Some ts -> Ptime.is_earlier ts.time ~than:now | None -> false
+            ) active_tasks in
+            let due_this_week = List.filter (fun (t : task) ->
+              t.status <> Done && match t.due_date with
+              | Some ts -> not (Ptime.is_earlier ts.time ~than:now) && Ptime.is_earlier ts.time ~than:week_end
+              | None -> false
+            ) active_tasks in
+            let inbox_items = List.filter (fun (t : task) -> t.status = Inbox) active_tasks in
+            let events_this_week = List.filter (fun (e : event) ->
+              Ptime.is_later e.start_time.time ~than:week_start && Ptime.is_earlier e.start_time.time ~than:week_end
+            ) model.events in
+            let all_items = 
+              List.map (fun t -> `Task t) overdue @
+              List.map (fun t -> `Task t) due_this_week @
+              List.map (fun e -> `Event e) events_this_week @
+              List.map (fun t -> `Task t) inbox_items @
+              List.map (fun t -> `Task t) completed_this_week
+            in
+            (match List.nth_opt all_items model.selected_index with
+             | Some (`Task t) ->
+               let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:t.id in
+               let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:t.id in
+               let subtasks = List.filter (fun (st : task) -> st.parent_id = Some t.id) model.tasks in
+               let att_idx = if subtasks <> [] then -1 else 0 in
+               loop { model with view = TaskDetail t.id; previous_views = model.view :: model.previous_views; current_attachments = attachments; attachment_index = att_idx; current_links = links; link_index = 0 }
+             | Some (`Event e) ->
+               loop { model with view = EventDetail e.id; previous_views = model.view :: model.previous_views }
+             | None -> loop model)
+          | TemplatePicker template_type, Some p ->
+            (* Create item from selected template *)
+            let templates = match template_type with `Note -> note_templates | `Task -> task_templates in
+            (match List.nth_opt templates model.selected_index with
+             | Some (_, name, content, tags) ->
+               (match template_type with
+                | `Note ->
+                  let* note_id = Storage.Queries.create_note p ~title:name ~content ~tags () in
+                  (match note_id with
+                   | Some id ->
+                     let* notes = Storage.Queries.list_notes p in
+                     let status = Some { text = "Created note from template: " ^ name; level = `Success; expires_at = None } in
+                     let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"note" ~entity_id:id in
+                     let* links = Storage.Queries.list_links_for_entity p ~entity_type:"note" ~entity_id:id in
+                     loop { model with view = NoteDetail id; notes; status; current_attachments = attachments; current_links = links; previous_views = List.tl model.previous_views }
+                   | None ->
+                     let status = Some { text = "Failed to create note"; level = `Error; expires_at = None } in
+                     loop { model with status })
+                | `Task ->
+                  let* task_id = Storage.Queries.create_task p ~title:name ~description:content ~priority:Domain.Types.P2 ~tags () in
+                  (match task_id with
+                   | Some id ->
+                     let* tasks = Storage.Queries.list_tasks p in
+                     let status = Some { text = "Created task from template: " ^ name; level = `Success; expires_at = None } in
+                     let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:id in
+                     let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:id in
+                     loop { model with view = TaskDetail id; tasks; status; current_attachments = attachments; current_links = links; previous_views = List.tl model.previous_views }
+                   | None ->
+                     let status = Some { text = "Failed to create task"; level = `Error; expires_at = None } in
+                     loop { model with status }))
+             | None -> loop model)
+          | ExportPicker, _ ->
+            (* Export data based on selected option *)
+            (match List.nth_opt export_options model.selected_index with
+             | Some (export_key, _) ->
+               let home = Sys.getenv_opt "HOME" |> Option.value ~default:"." in
+               let export_dir = home ^ "/parenvault-export" in
+               (try Unix.mkdir export_dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+               let (filename, content) = match export_key with
+                 | "tasks-md" -> ("tasks.md", export_tasks_markdown model.tasks)
+                 | "tasks-json" -> ("tasks.json", export_tasks_json model.tasks)
+                 | "tasks-csv" -> ("tasks.csv", export_tasks_csv model.tasks)
+                 | "notes-md" -> ("notes.md", export_notes_markdown model.notes)
+                 | "notes-json" -> ("notes.json", export_notes_json model.notes)
+                 | "events-md" -> ("events.md", export_events_markdown model.events)
+                 | "events-json" -> ("events.json", export_events_json model.events)
+                 | "all-json" -> ("all-data.json", export_all_json model)
+                 | _ -> ("export.txt", "Unknown export type")
+               in
+               let filepath = export_dir ^ "/" ^ filename in
+               let oc = open_out filepath in
+               output_string oc content;
+               close_out oc;
+               let status = Some { text = "Exported to " ^ filepath; level = `Success; expires_at = None } in
+               let new_view = match model.previous_views with v :: _ -> v | [] -> Dashboard in
+               let prev = match model.previous_views with _ :: rest -> rest | [] -> [] in
+               loop { model with view = new_view; previous_views = prev; status }
+             | None -> loop model)
+          | FilterView None, Some _ ->
+            (* Select a filter option *)
+            let open Domain.Types in
+            let task_tags = List.concat_map (fun (t : task) -> t.tags) model.tasks in
+            let note_tags = List.concat_map (fun (n : note) -> n.tags) model.notes in
+            let unique_tags = List.sort_uniq String.compare (task_tags @ note_tags) in
+            let filter_options = 
+              [("priority:P0", ""); ("priority:P1", ""); ("priority:P2", ""); ("priority:P3", "");
+               ("status:overdue", ""); ("status:today", ""); ("status:week", ""); ("status:inbox", "")] @
+              List.map (fun (p : project) -> ("project:" ^ p.id, "")) model.projects @
+              List.map (fun tag -> ("tag:" ^ tag, "")) unique_tags
+            in
+            (match List.nth_opt filter_options model.selected_index with
+             | Some (filter_key, _) ->
+               loop { model with view = FilterView (Some filter_key); selected_index = 0 }
+             | None -> loop model)
+          | FilterView (Some filter_str), Some p ->
+            (* Open selected task from filtered results *)
+            let open Domain.Types in
+            let filtered_tasks = 
+              if String.length filter_str > 4 && String.sub filter_str 0 4 = "tag:" then
+                let tag = String.sub filter_str 4 (String.length filter_str - 4) in
+                List.filter (fun (t : task) -> List.mem tag t.tags) model.tasks
+              else if String.length filter_str > 9 && String.sub filter_str 0 9 = "priority:" then
+                let p_str = String.sub filter_str 9 (String.length filter_str - 9) in
+                let priority = priority_of_string p_str in
+                List.filter (fun (t : task) -> match priority with Some pr -> t.priority = pr | None -> false) model.tasks
+              else if String.length filter_str > 8 && String.sub filter_str 0 8 = "project:" then
+                let proj_id = String.sub filter_str 8 (String.length filter_str - 8) in
+                List.filter (fun (t : task) -> t.project_id = Some proj_id) model.tasks
+              else if filter_str = "status:overdue" then
+                let now = Ptime_clock.now () in
+                List.filter (fun (t : task) -> t.status <> Done && match t.due_date with Some ts -> Ptime.is_earlier ts.time ~than:now | None -> false) model.tasks
+              else if filter_str = "status:today" then
+                let today = Ptime.to_date (Ptime_clock.now ()) in
+                List.filter (fun (t : task) -> match t.due_date with Some ts -> Ptime.to_date ts.time = today | None -> false) model.tasks
+              else if filter_str = "status:week" then
+                let now = Ptime_clock.now () in
+                let week_end = match Ptime.add_span now (Ptime.Span.of_int_s (7 * 24 * 3600)) with Some t -> t | None -> now in
+                List.filter (fun (t : task) -> t.status <> Done && match t.due_date with Some ts -> Ptime.is_earlier ts.time ~than:week_end | None -> false) model.tasks
+              else if filter_str = "status:inbox" then
+                List.filter (fun (t : task) -> t.status = Inbox) model.tasks
+              else
+                model.tasks
+            in
+            (match List.nth_opt filtered_tasks model.selected_index with
+             | Some t ->
+               let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:t.id in
+               let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:t.id in
+               let subtasks = List.filter (fun (st : task) -> st.parent_id = Some t.id) model.tasks in
+               let att_idx = if subtasks <> [] then -1 else 0 in
+               loop { model with view = TaskDetail t.id; previous_views = model.view :: model.previous_views; current_attachments = attachments; attachment_index = att_idx; current_links = links; link_index = 0 }
+             | None -> loop model)
           | (TaskList | Inbox | Dashboard | NoteList | Calendar | Projects), Some p ->
             let new_model = Update.update model OpenSelected in
             (* Load attachments/links for the new view *)

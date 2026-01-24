@@ -22,6 +22,10 @@ type view =
   | ProjectEdit of uuid option  (** None = new project *)
   | Inbox
   | Archive
+  | WeeklyReview
+  | FilterView of string option  (** Current filter: None=selecting, Some tag/priority/etc *)
+  | TemplatePicker of [`Note | `Task]  (** Picking a template for note or task *)
+  | ExportPicker  (** Selecting export format and type *)
   | Search of string
   | LinkPicker of string * uuid  (** source_type, source_id - picking target to link *)
 
