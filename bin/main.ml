@@ -238,11 +238,185 @@ exec "%s" tui "$@"
   let info = Cmd.info "install" ~doc in
   Cmd.v info Term.(const run $ prefix $ password)
 
+(** Import email as task - reads RFC 2822 email from stdin *)
+let import_email_cmd =
+  let config_file =
+    let doc = "Path to configuration file." in
+    Arg.(value & opt string (Config.config_path ()) & info ["c"; "config"] ~docv:"FILE" ~doc)
+  in
+  let as_note =
+    let doc = "Import as note instead of task." in
+    Arg.(value & flag & info ["n"; "note"] ~doc)
+  in
+  let run config_path as_note =
+    let config = init_app config_path in
+    (* Read email from stdin *)
+    let buf = Buffer.create 4096 in
+    (try
+      while true do
+        Buffer.add_string buf (input_line stdin);
+        Buffer.add_char buf '\n'
+      done
+    with End_of_file -> ());
+    let content = Buffer.contents buf in
+    (* Parse headers *)
+    let lines = String.split_on_char '\n' content in
+    let rec parse_headers acc = function
+      | [] -> acc
+      | "" :: _ -> acc
+      | line :: rest when String.length line > 0 && (line.[0] = ' ' || line.[0] = '\t') ->
+        (match acc with
+         | (k, v) :: acc_rest -> parse_headers ((k, v ^ " " ^ String.trim line) :: acc_rest) rest
+         | [] -> parse_headers acc rest)
+      | line :: rest ->
+        (match String.index_opt line ':' with
+         | Some i ->
+           let key = String.lowercase_ascii (String.sub line 0 i) in
+           let value = String.trim (String.sub line (i + 1) (String.length line - i - 1)) in
+           parse_headers ((key, value) :: acc) rest
+         | None -> parse_headers acc rest)
+    in
+    let headers = parse_headers [] lines in
+    let get key = List.assoc_opt key headers |> Option.value ~default:"" in
+    let subject = get "subject" in
+    let from = get "from" in
+    let date = get "date" in
+    (* Extract body (after blank line) *)
+    let body = 
+      try
+        let pos = Str.search_forward (Str.regexp "\n\n\\|\r\n\r\n") content 0 in
+        String.sub content (pos + 2) (String.length content - pos - 2)
+      with Not_found -> ""
+    in
+    let body_preview = if String.length body > 500 then String.sub body 0 500 ^ "..." else body in
+    (* Create task or note *)
+    if as_note then begin
+      let note = Domain.Entity.create_note
+        ~device_id:config.device_id
+        ~title:subject
+        ~content:(Printf.sprintf "From: %s\nDate: %s\n\n%s" from date body_preview)
+        ~tags:["email"]
+        ()
+      in
+      (* Save to database *)
+      Lwt_main.run (
+        let open Lwt.Syntax in
+        let* db_result = Storage.Db.init ~local_path:config.db.local_path () in
+        match db_result with
+        | Ok ctx ->
+          let pool = Storage.Db.local ctx in
+          let* _ = Storage.Queries.create_note pool ~title:note.title ~content:note.content ~tags:note.tags () in
+          Printf.printf "Created note: %s\n" note.title;
+          Lwt.return ()
+        | Error msg ->
+          Printf.eprintf "Failed to connect to database: %s\n" msg;
+          Lwt.return ()
+      )
+    end else begin
+      let task = Domain.Entity.create_task
+        ~device_id:config.device_id
+        ~title:subject
+        ~description:(Printf.sprintf "From: %s\n\n%s" from body_preview)
+        ~priority:Domain.Types.P2
+        ~tags:["email"]
+        ()
+      in
+      (* Save to database *)
+      Lwt_main.run (
+        let open Lwt.Syntax in
+        let* db_result = Storage.Db.init ~local_path:config.db.local_path () in
+        match db_result with
+        | Ok ctx ->
+          let pool = Storage.Db.local ctx in
+          let* _ = Storage.Queries.create_task pool ~title:task.title ~description:(Option.value ~default:"" task.description) ~priority:task.priority ~tags:task.tags () in
+          Printf.printf "Created task: %s\n" task.title;
+          Lwt.return ()
+        | Error msg ->
+          Printf.eprintf "Failed to connect to database: %s\n" msg;
+          Lwt.return ()
+      )
+    end
+  in
+  let doc = "Import email as task (or note with -n). Reads RFC 2822 email from stdin." in
+  let info = Cmd.info "import-email" ~doc in
+  Cmd.v info Term.(const run $ config_file $ as_note)
+
+(** Send task/note as email - opens aerc compose *)
+let send_cmd =
+  let config_file =
+    let doc = "Path to configuration file." in
+    Arg.(value & opt string (Config.config_path ()) & info ["c"; "config"] ~docv:"FILE" ~doc)
+  in
+  let item_id =
+    let doc = "Task or note ID to send." in
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc)
+  in
+  let recipient =
+    let doc = "Recipient email address." in
+    Arg.(required & pos 1 (some string) None & info [] ~docv:"EMAIL" ~doc)
+  in
+  let run config_path item_id recipient =
+    let config = init_app config_path in
+    Lwt_main.run (
+      let open Lwt.Syntax in
+      let* db_result = Storage.Db.init ~local_path:config.db.local_path () in
+      match db_result with
+      | Ok ctx ->
+        let p = Storage.Db.local ctx in
+        (* Try to find as task first, then note *)
+        let* tasks = Storage.Queries.list_tasks p in
+        let* notes = Storage.Queries.list_notes p in
+        let task_opt = List.find_opt (fun (t : Domain.Types.task) -> 
+          String.length t.id >= 8 && String.sub t.id 0 8 = item_id
+        ) tasks in
+        let note_opt = List.find_opt (fun (n : Domain.Types.note) -> 
+          String.length n.id >= 8 && String.sub n.id 0 8 = item_id
+        ) notes in
+        (match task_opt, note_opt with
+         | Some task, _ ->
+           let subject = Printf.sprintf "[Task] %s" task.title in
+           let body = Printf.sprintf "Task: %s\n\nStatus: %s\nPriority: %s\n\n%s\n\n--\nSent from ParenVault"
+             task.title
+             (Domain.Types.task_status_to_string task.status)
+             (Domain.Types.priority_to_string task.priority)
+             (Option.value ~default:"" task.description)
+           in
+           let mailto = Printf.sprintf "mailto:%s?subject=%s&body=%s" 
+             recipient 
+             (Uri.pct_encode subject)
+             (Uri.pct_encode body)
+           in
+           let _ = Sys.command (Printf.sprintf "aerc '%s' &" mailto) in
+           Printf.printf "Opening aerc compose for task: %s\n" task.title;
+           Lwt.return ()
+         | None, Some note ->
+           let subject = Printf.sprintf "[Note] %s" note.title in
+           let body = Printf.sprintf "%s\n\n--\nSent from ParenVault" note.content in
+           let mailto = Printf.sprintf "mailto:%s?subject=%s&body=%s"
+             recipient
+             (Uri.pct_encode subject)
+             (Uri.pct_encode body)
+           in
+           let _ = Sys.command (Printf.sprintf "aerc '%s' &" mailto) in
+           Printf.printf "Opening aerc compose for note: %s\n" note.title;
+           Lwt.return ()
+         | None, None ->
+           Printf.eprintf "No task or note found with ID starting with: %s\n" item_id;
+           Lwt.return ())
+      | Error msg ->
+        Printf.eprintf "Failed to connect to database: %s\n" msg;
+        Lwt.return ()
+    )
+  in
+  let doc = "Send task or note as email via aerc. Usage: parenvault send <ID> <EMAIL>" in
+  let info = Cmd.info "send" ~doc in
+  Cmd.v info Term.(const run $ config_file $ item_id $ recipient)
+
 (** Main command group *)
 let main_cmd =
   let doc = "Personal Knowledge Management TUI with offline-first sync" in
   let info = Cmd.info "parenvault" ~version:"0.1.0" ~doc in
   let default = Term.(ret (const (`Help (`Pager, None)))) in
-  Cmd.group info ~default [tui_cmd; sync_cmd; add_cmd; list_cmd; init_cmd; install_cmd]
+  Cmd.group info ~default [tui_cmd; sync_cmd; add_cmd; list_cmd; init_cmd; install_cmd; import_email_cmd; send_cmd]
 
 let () = exit (Cmd.eval main_cmd)

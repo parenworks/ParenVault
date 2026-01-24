@@ -211,6 +211,26 @@ Press `t` to open the template picker:
 
 - Blank Task, Bug Report, Feature Request, Code Review
 
+### aerc Email Integration
+
+**Import email as task/note (in aerc):**
+
+Add to `~/.config/aerc/binds.conf`:
+```
+pt = :pipe -m parenvault import-email<Enter>
+pn = :pipe -m parenvault import-email -n<Enter>
+```
+
+- `pt` in aerc → pipes email to ParenVault, creates task (tagged "email")
+- `pn` in aerc → pipes email to ParenVault, creates note (tagged "email")
+
+**Send task/note via email:**
+```bash
+parenvault send <task-id-prefix> recipient@example.com
+```
+
+Opens aerc compose with task/note content pre-filled.
+
 ### Export
 
 Press `E` to export data:

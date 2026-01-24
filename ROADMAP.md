@@ -30,6 +30,7 @@ A checklist of planned features for the ParenVault PKM application.
 
 - [ ] **Keyboard Macros** - Custom shortcuts for common actions
 - [x] **Export** - Markdown, JSON, CSV export (E key)
+- [x] **aerc Integration** - Import emails as tasks/notes, send tasks via email
 - [x] **Sync Status** - Indicators: ●=local, ⟳=pending, ✓=synced
 - [ ] **Undo/Redo** - Revert recent changes
 - [x] **Attachments** - Link files to notes/tasks
@@ -98,3 +99,4 @@ All initial sprint features are done:
 - [x] Templates (`t` key - built-in templates for notes and tasks)
 - [x] Export (`E` key - export lists to MD/JSON/CSV, or single item from detail view)
 - [x] Centered UI (content centered horizontally and vertically)
+- [x] aerc integration (`pt`/`pn` in aerc to import email, `parenvault send` to email tasks)
