@@ -51,7 +51,7 @@ let render_header model width =
   I.(header_line <-> separator)
 
 (** Render a task line *)
-let render_task_line ~selected ~width (task : Domain.Types.task) =
+let render_task_line ~selected ~width ~subtask_progress (task : Domain.Types.task) =
   let open Domain.Types in
   let attr = if selected then A.(fg white ++ bg blue) else A.empty in
   let status_char = match task.Domain.Types.status with
@@ -100,12 +100,20 @@ let render_task_line ~selected ~width (task : Domain.Types.task) =
       then ("⟳", A.(fg yellow))  (* Pending - modified since last sync *)
       else ("✓", A.(fg green))   (* Synced *)
   in
+  (* Subtask progress indicator *)
+  let progress_str = match subtask_progress with
+    | Some (done_count, total) when total > 0 ->
+      let pct = (done_count * 100) / total in
+      Printf.sprintf " [%d/%d %d%%]" done_count total pct
+    | _ -> ""
+  in
   let line = I.(
     string sync_attr sync_char <|>
     string attr prefix <|>
     string attr status_char <|>
     string priority_attr priority_str <|>
     string attr (" " ^ task.title) <|>
+    string A.(fg green) progress_str <|>
     string due_attr due_str <|>
     string A.(fg cyan) tags_str
   ) in
@@ -138,9 +146,11 @@ let render_note_line ~selected ~width (note : Domain.Types.note) =
 
 (** Render task list *)
 let render_task_list model width height =
+  let all_tasks = model.tasks in
   let tasks = match model.view with
-    | Inbox -> List.filter (fun (t : Domain.Types.task) -> t.Domain.Types.status = Domain.Types.Inbox) model.tasks
-    | _ -> model.tasks
+    | Inbox -> List.filter (fun (t : Domain.Types.task) -> t.Domain.Types.status = Domain.Types.Inbox) all_tasks
+    | _ -> (* Filter out subtasks from main list - only show top-level tasks *)
+      List.filter (fun (t : Domain.Types.task) -> t.parent_id = None) all_tasks
   in
   let visible_height = height - 4 in
   let start_idx = model.scroll_offset in
@@ -148,9 +158,18 @@ let render_task_list model width height =
     tasks 
     |> List.filteri (fun i _ -> i >= start_idx && i < start_idx + visible_height)
   in
-  let lines = List.mapi (fun i task ->
+  let lines = List.mapi (fun i (task : Domain.Types.task) ->
     let actual_idx = start_idx + i in
-    render_task_line ~selected:(actual_idx = model.selected_index) ~width task
+    (* Calculate subtask progress for this task *)
+    let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some task.id) all_tasks in
+    let subtask_progress = 
+      if subtasks = [] then None
+      else
+        let total = List.length subtasks in
+        let done_count = List.filter (fun (st : Domain.Types.task) -> st.Domain.Types.status = Domain.Types.Done) subtasks |> List.length in
+        Some (done_count, total)
+    in
+    render_task_line ~selected:(actual_idx = model.selected_index) ~width ~subtask_progress task
   ) visible_tasks in
   if lines = [] then
     I.string A.(fg (gray 12)) "  No tasks"
@@ -356,15 +375,23 @@ let render model (width, height) =
          let sched_str = format_date_opt task.scheduled_date in
          (* Find subtasks *)
          let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some id) model.tasks in
-         let subtasks_section = 
-           if subtasks = [] then I.empty
+         let (subtasks_section, progress_str) = 
+           if subtasks = [] then (I.empty, "")
            else
-             let subtask_lines = List.map (fun (st : Domain.Types.task) ->
+             let total = List.length subtasks in
+             let done_count = List.filter (fun (st : Domain.Types.task) -> st.status = Domain.Types.Done) subtasks |> List.length in
+             let pct = if total > 0 then (done_count * 100) / total else 0 in
+             let progress = Printf.sprintf " [%d/%d - %d%%]" done_count total pct in
+             let subtask_lines = List.mapi (fun i (st : Domain.Types.task) ->
+               let selected = i = model.subtask_index in
                let status_char = if st.status = Domain.Types.Done then "✓" else "○" in
-               I.string A.(fg (gray 14)) (Printf.sprintf "      %s %s" status_char st.title)
+               let prefix = if selected then "    ▶ " else "      " in
+               let attr = if selected then A.(fg white ++ st bold) else A.(fg (gray 14)) in
+               I.string attr (Printf.sprintf "%s%s %s" prefix status_char st.title)
              ) subtasks in
-             I.(void 0 1 <-> string A.(st bold ++ fg cyan) "  Subtasks:" <-> vcat subtask_lines)
+             (I.(void 0 1 <-> string A.(st bold ++ fg cyan) ("  Subtasks:" ^ progress ^ " (j/k:nav x:toggle)") <-> vcat subtask_lines), progress)
          in
+         let _ = progress_str in (* suppress unused warning *)
          I.(
            void 0 1 <->
            string A.(st bold) ("  " ^ task.Domain.Types.title) <->
@@ -565,15 +592,40 @@ let handle_key model key =
   | `Escape -> 
     `Continue (update model ExitInsertMode)
   | `ASCII 'j' | `Arrow `Down when model.input_mode = Normal -> 
-    `Continue (update model SelectNext)
+    (match model.view with
+     | TaskDetail id ->
+       (* Navigate subtasks in task detail view *)
+       let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some id) model.tasks in
+       let max_idx = max 0 (List.length subtasks - 1) in
+       let new_idx = min (model.subtask_index + 1) max_idx in
+       `Continue { model with subtask_index = new_idx }
+     | _ -> `Continue (update model SelectNext))
   | `ASCII 'k' | `Arrow `Up when model.input_mode = Normal -> 
-    `Continue (update model SelectPrev)
+    (match model.view with
+     | TaskDetail id ->
+       (* Navigate subtasks in task detail view *)
+       let _ = id in (* suppress unused warning *)
+       let new_idx = max 0 (model.subtask_index - 1) in
+       `Continue { model with subtask_index = new_idx }
+     | _ -> `Continue (update model SelectPrev))
   | `ASCII 'g' when model.input_mode = Normal -> 
     `Continue (update model SelectFirst)
   | `ASCII 'G' when model.input_mode = Normal -> 
     `Continue (update model SelectLast)
   | `Enter when model.input_mode = Normal -> 
-    `Continue (update model OpenSelected)
+    (match model.view with
+     | TaskDetail parent_id ->
+       (* Open selected subtask *)
+       let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some parent_id) model.tasks in
+       (match List.nth_opt subtasks model.subtask_index with
+        | Some subtask -> 
+          `Continue { model with 
+            view = TaskDetail subtask.id;
+            previous_views = model.view :: model.previous_views;
+            subtask_index = 0;
+          }
+        | None -> `Continue model)
+     | _ -> `Continue (update model OpenSelected))
   | `ASCII 'n' when model.input_mode = Normal -> 
     `Continue (update model CreateNew)
   | `ASCII 'c' when model.input_mode = Normal -> 
@@ -587,7 +639,19 @@ let handle_key model key =
   | `ASCII 'D' when model.input_mode = Normal -> 
     `Continue (update model DailyNote)
   | `ASCII 'x' when model.input_mode = Normal -> 
-    `Continue (update model ToggleTaskStatus)
+    (match model.view with
+     | TaskDetail task_id ->
+       (* Check if this task has subtasks *)
+       let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some task_id) model.tasks in
+       if subtasks <> [] then
+         (* Toggle selected subtask status *)
+         (match List.nth_opt subtasks model.subtask_index with
+          | Some subtask -> `Continue (update model (ToggleSubtaskStatus subtask.id))
+          | None -> `Continue model)
+       else
+         (* This task has no subtasks - toggle its own status (it might be a subtask itself) *)
+         `Continue (update model (ToggleSubtaskStatus task_id))
+     | _ -> `Continue (update model ToggleTaskStatus))
   | `ASCII 's' when model.input_mode = Normal -> 
     `Continue (update model TriggerSync)
   | `ASCII '/' when model.input_mode = Normal -> 
@@ -1124,21 +1188,43 @@ let run ~config () =
          loop new_model
        | `ASCII 'x', Normal ->
          (* Toggle task status and save to DB *)
-         let new_model = Update.update model ToggleTaskStatus in
-         (* Save the status change to DB if a task was toggled *)
          (match model.view, db_pool with
           | (TaskList | Inbox | Dashboard), Some p ->
             let tasks_list = match model.view with
               | Inbox -> List.filter (fun (t : Domain.Types.task) -> t.status = Domain.Types.Inbox) model.tasks
-              | _ -> model.tasks
+              | _ -> List.filter (fun (t : Domain.Types.task) -> t.parent_id = None) model.tasks
             in
             (match List.nth_opt tasks_list model.selected_index with
              | Some task ->
                let new_status = if task.status = Domain.Types.Done then Domain.Types.Todo else Domain.Types.Done in
                let* _result = Storage.Queries.update_task_status p ~id:task.id ~status:new_status in
+               let new_model = Update.update model ToggleTaskStatus in
                loop new_model
-             | None -> loop new_model)
-          | _ -> loop new_model)
+             | None -> loop model)
+          | TaskDetail task_id, Some p ->
+            (* Handle subtask toggling in task detail view *)
+            let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some task_id) model.tasks in
+            let target_id = 
+              if subtasks <> [] then
+                (* Toggle selected subtask *)
+                match List.nth_opt subtasks model.subtask_index with
+                | Some subtask -> Some subtask.Domain.Types.id
+                | None -> None
+              else
+                (* No subtasks - toggle this task's own status *)
+                Some task_id
+            in
+            (match target_id with
+             | Some id ->
+               (match List.find_opt (fun (t : Domain.Types.task) -> t.id = id) model.tasks with
+                | Some task ->
+                  let new_status = if task.status = Domain.Types.Done then Domain.Types.Todo else Domain.Types.Done in
+                  let* _result = Storage.Queries.update_task_status p ~id ~status:new_status in
+                  let new_model = Update.update model (ToggleSubtaskStatus id) in
+                  loop new_model
+                | None -> loop model)
+             | None -> loop model)
+          | _ -> loop model)
        | _ ->
          (match handle_key model key with
           | `Quit -> 

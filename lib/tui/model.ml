@@ -82,6 +82,9 @@ type model = {
   search_query: string;
   search_results: [`Task of task | `Note of note | `Event of event | `Contact of contact] list;
   
+  (* Subtask selection in task detail view *)
+  subtask_index: int;
+  
   (* Config *)
   device_id: string;
   
@@ -111,6 +114,7 @@ let init ~device_id =
     status = None;
     search_query = "";
     search_results = [];
+    subtask_index = 0;
     device_id;
     width = 80;
     height = 24;
@@ -140,6 +144,7 @@ type msg =
   | EditSelected
   | DeleteSelected
   | ToggleTaskStatus
+  | ToggleSubtaskStatus of uuid  (* Toggle subtask by ID *)
   | SetTaskPriority of priority
   
   (* Input *)

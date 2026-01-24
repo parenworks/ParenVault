@@ -21,7 +21,7 @@ A checklist of planned features for the ParenVault PKM application.
 - [ ] **Weekly Review** - Summary of completed tasks, upcoming deadlines
 - [ ] **Templates** - Predefined structures for common note/task types
 - [ ] **Archive** - Hide completed items but keep them searchable
-- [ ] **Subtasks/Checklists** - Nested tasks within a parent task
+- [x] **Subtasks/Checklists** - Nested tasks within a parent task
 - [ ] **Time Blocking** - Assign time slots to tasks
 
 ---
@@ -82,3 +82,6 @@ All initial sprint features are done:
 - [x] Sync Status indicators (●=local, ⟳=pending, ✓=synced)
 - [x] Priority field arrow key navigation (←/→ to change)
 - [x] PostgreSQL remote sync working with soft deletes
+- [x] Subtasks/Checklists (`a` key to add subtask, j/k to navigate, x to toggle)
+- [x] Subtask progress display [done/total %] in task list and detail views
+- [x] Auto-complete parent task when all subtasks are done

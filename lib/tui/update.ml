@@ -72,13 +72,14 @@ let update model msg =
      | TaskList | Inbox | Dashboard ->
        let tasks = match model.view with
          | Inbox -> List.filter (fun (t : Domain.Types.task) -> t.Domain.Types.status = Domain.Types.Inbox) model.tasks
-         | _ -> model.tasks
+         | _ -> List.filter (fun (t : Domain.Types.task) -> t.parent_id = None) model.tasks  (* Exclude subtasks *)
        in
        (match List.nth_opt tasks model.selected_index with
         | Some task -> 
           { model with 
             view = TaskDetail task.id;
             previous_views = model.view :: model.previous_views;
+            subtask_index = 0;  (* Reset subtask selection *)
           }
         | None -> model)
      | NoteList ->
@@ -369,7 +370,7 @@ let update model msg =
      | TaskList | Inbox | Dashboard ->
        let tasks = match model.view with
          | Inbox -> List.filter (fun (t : Domain.Types.task) -> t.status = Domain.Types.Inbox) model.tasks
-         | _ -> model.tasks
+         | _ -> List.filter (fun (t : Domain.Types.task) -> t.parent_id = None) model.tasks
        in
        (match List.nth_opt tasks model.selected_index with
         | Some task ->
@@ -384,6 +385,36 @@ let update model msg =
           }
         | None -> model)
      | _ -> model)
+
+  | ToggleSubtaskStatus subtask_id ->
+    (* Toggle subtask status by ID *)
+    (match List.find_opt (fun (t : Domain.Types.task) -> t.id = subtask_id) model.tasks with
+     | None ->
+       { model with status = Some { text = "Task not found: " ^ subtask_id; level = `Error; expires_at = None } }
+     | Some subtask ->
+       let new_status = if subtask.status = Domain.Types.Done then Domain.Types.Todo else Domain.Types.Done in
+       let updated_tasks = List.map (fun (t : Domain.Types.task) ->
+         if t.id = subtask_id then { t with status = new_status } else t
+       ) model.tasks in
+       (* Check if all subtasks of parent are now done - auto-complete parent *)
+       let (final_tasks, extra_msg) = match subtask.parent_id with
+         | Some parent_id when new_status = Domain.Types.Done ->
+           let siblings = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some parent_id) updated_tasks in
+           let all_done = List.for_all (fun (t : Domain.Types.task) -> t.status = Domain.Types.Done) siblings in
+           if all_done then
+             let tasks_with_parent_done = List.map (fun (t : Domain.Types.task) ->
+               if t.id = parent_id then { t with status = Domain.Types.Done } else t
+             ) updated_tasks in
+             (tasks_with_parent_done, " - Parent task completed!")
+           else
+             (updated_tasks, "")
+         | _ -> (updated_tasks, "")
+       in
+       let status_text = (if new_status = Domain.Types.Done then "Subtask done ✓" else "Subtask todo") ^ extra_msg in
+       { model with 
+         tasks = final_tasks; 
+         status = Some { text = status_text; level = `Success; expires_at = None } 
+       })
   
   | SetTaskPriority _ ->
     model
