@@ -32,6 +32,7 @@ let render_header model width =
     | Inbox -> "Inbox"
     | Archive -> "Archive"
     | Search q -> "Search: " ^ q
+    | LinkPicker _ -> "Link To..."
   in
   let sync_indicator = 
     if model.sync_online then
@@ -297,13 +298,14 @@ let render_footer model term_width =
     | ContactList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | Projects -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | Archive -> "j/k:nav r:restore d:delete Esc:back | " ^ nav_hint
-    | TaskDetail _ -> "e:edit a:subtask d:del D:daily Esc:back | " ^ nav_hint
-    | NoteDetail _ -> "e:edit d:del D:daily Esc:back | " ^ nav_hint
-    | EventDetail _ -> "e:edit d:del Esc:back | " ^ nav_hint
-    | ContactDetail _ -> "e:edit d:del Esc:back | " ^ nav_hint
-    | ProjectDetail _ -> "e:edit d:del Esc:back | " ^ nav_hint
+    | TaskDetail _ -> "e:edit a:subtask A:attach L:link o:open d:del Esc:back | " ^ nav_hint
+    | NoteDetail _ -> "e:edit A:attach L:link o:open d:del Esc:back | " ^ nav_hint
+    | EventDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
+    | ContactDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
+    | ProjectDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
     | TaskEdit _ | NoteEdit _ | EventEdit _ | ContactEdit _ | ProjectEdit _ -> "Tab/↓:next ↑:prev Enter:save Esc:cancel"
     | Search _ -> "↑/↓:nav Enter:open Esc:cancel | type to search"
+    | LinkPicker _ -> "j/k:nav Enter:link Esc:cancel"
   in
   let help_img = I.string A.(fg (gray 16)) (" " ^ help) in
   let status_img = match model.status with
@@ -317,36 +319,102 @@ let render_footer model term_width =
       I.string attr ("  " ^ s.text)
     | None -> I.empty
   in
+  (* Show input buffer in Command mode *)
+  let command_input = 
+    if model.input_mode = Command then
+      I.string A.(fg white ++ st underline) model.input_buffer
+    else I.empty
+  in
   let separator = I.string A.(fg blue) (String.make term_width '-') in
-  let footer_content = I.(mode <|> help_img <|> status_img) in
+  let footer_content = I.(mode <|> help_img <|> status_img <|> command_input) in
   I.(separator <-> hsnap ~align:`Left term_width footer_content)
 
-(** Render a form with multiple fields *)
-let render_form ~title (form : Model.form_state) =
+(** Render a form with multiple fields - hacker aesthetic *)
+let render_form ~title (form : Model.form_state) term_width =
+  let box_width = min 70 (term_width - 4) in
+  let h_line = String.concat "" (List.init box_width (fun _ -> "─")) in
   let field_lines = List.mapi (fun i (field : Model.form_field) ->
     let focused = i = form.focused_field in
-    let indicator = if focused then "▶ " else "  " in
-    let value_display = if field.value = "" then "________________" else field.value in
-    let value_attr = if focused then A.(st underline ++ fg white) else A.(fg (gray 16)) in
-    let label_attr = if focused then A.(st bold) else A.empty in
-    let hint = match field.field_type with
-      | `MultiSelect _ when focused -> " (M T W R F S U to toggle)"
-      | `Select _ when focused -> " (←/→ to change)"
-      | _ -> ""
-    in
-    I.(string A.empty ("  " ^ indicator) <|> 
-       string label_attr (field.name ^ ": ") <|> 
-       string value_attr value_display <|>
-       string A.(fg (gray 10)) hint)
+    let indicator = if focused then "▶" else " " in
+    let label_attr = if focused then A.(st bold ++ fg cyan) else A.(fg (gray 14)) in
+    let value_attr = if focused then A.(fg white ++ bg (gray 3)) else A.(fg (gray 16)) in
+    let border_attr = if focused then A.(fg cyan) else A.(fg (gray 8)) in
+    match field.field_type with
+    | `MultiLine ->
+      (* Multi-line text area with box *)
+      let lines = String.split_on_char '\n' field.value in
+      let display_lines = if lines = [""] then [""] else lines in
+      let min_lines = 4 in
+      let padded_lines = 
+        if List.length display_lines < min_lines then
+          display_lines @ List.init (min_lines - List.length display_lines) (fun _ -> "")
+        else display_lines
+      in
+      let content_width = box_width - 4 in
+      let text_lines = List.map (fun line ->
+        let padded = if String.length line < content_width 
+          then line ^ String.make (content_width - String.length line) ' '
+          else String.sub line 0 content_width in
+        I.(string border_attr "  │ " <|> string value_attr padded <|> string border_attr " │")
+      ) padded_lines in
+      let hint = if focused then " (Ctrl+Enter for newline)" else "" in
+      let box_h_line = String.concat "" (List.init (content_width + 2) (fun _ -> "─")) in
+      I.vcat ([
+        I.(string A.empty ("  " ^ indicator ^ " ") <|> string label_attr field.name <|> string A.(fg (gray 10)) hint);
+        I.(string border_attr ("  ┌" ^ box_h_line ^ "┐"));
+      ] @ text_lines @ [
+        I.(string border_attr ("  └" ^ box_h_line ^ "┘"));
+      ])
+    | `Select _options ->
+      let hint = if focused then " ◀ ▶" else "" in
+      let value_display = if field.value = "" then "---" else field.value in
+      I.(string A.empty ("  " ^ indicator ^ " ") <|> 
+         string label_attr (field.name ^ ": ") <|>
+         string border_attr "[" <|>
+         string value_attr (" " ^ value_display ^ " ") <|>
+         string border_attr "]" <|>
+         string A.(fg yellow) hint)
+    | `MultiSelect _ ->
+      let hint = if focused then " (M T W R F S U)" else "" in
+      let value_display = if field.value = "" || field.value = "None" then "---" else field.value in
+      I.(string A.empty ("  " ^ indicator ^ " ") <|> 
+         string label_attr (field.name ^ ": ") <|>
+         string border_attr "[" <|>
+         string value_attr (" " ^ value_display ^ " ") <|>
+         string border_attr "]" <|>
+         string A.(fg yellow) hint)
+    | `Date ->
+      let hint = if focused then " (YYYY-MM-DD)" else "" in
+      let value_display = if field.value = "" then "____-__-__" else field.value in
+      I.(string A.empty ("  " ^ indicator ^ " ") <|> 
+         string label_attr (field.name ^ ": ") <|>
+         string border_attr "[" <|>
+         string value_attr (" " ^ value_display ^ " ") <|>
+         string border_attr "]" <|>
+         string A.(fg (gray 10)) hint)
+    | `Text ->
+      let max_len = 50 in
+      let value_display = 
+        if field.value = "" then String.make (min 20 max_len) '_'
+        else if String.length field.value > max_len 
+        then String.sub field.value 0 (max_len - 3) ^ "..."
+        else field.value ^ String.make (max 0 (20 - String.length field.value)) ' '
+      in
+      I.(string A.empty ("  " ^ indicator ^ " ") <|> 
+         string label_attr (field.name ^ ": ") <|>
+         string value_attr value_display)
   ) form.fields in
-  I.vcat ([
-    I.void 0 1;
-    I.string A.(st bold) ("  " ^ title);
-    I.void 0 1;
-  ] @ field_lines @ [
-    I.void 0 1;
-    I.string A.(fg (gray 12)) "  Tab/↓: next field  Shift+Tab/↑: prev field  Enter: save  Esc: cancel";
-  ])
+  let header_line = I.(string A.(fg cyan) ("  ┌" ^ h_line ^ "┐")) in
+  let title_line = I.(string A.(fg cyan) "  │ " <|> string A.(st bold ++ fg white) title <|> 
+                      string A.empty (String.make (box_width - String.length title - 2) ' ') <|>
+                      string A.(fg cyan) " │") in
+  let sep_line = I.(string A.(fg cyan) ("  ├" ^ h_line ^ "┤")) in
+  let footer_line = I.(string A.(fg cyan) ("  └" ^ h_line ^ "┘")) in
+  let help_text = I.(string A.(fg (gray 10)) "  ↑/↓:navigate  Enter:save  Esc:cancel") in
+  I.vcat ([header_line; title_line; sep_line] @ 
+          [I.void 0 1] @ 
+          (List.concat_map (fun f -> [f; I.void 0 0]) field_lines) @
+          [I.void 0 1; footer_line; help_text])
 
 (** Main render function *)
 let render model (width, height) =
@@ -394,6 +462,47 @@ let render model (width, height) =
              (I.(void 0 1 <-> string A.(st bold ++ fg cyan) ("  Subtasks:" ^ progress ^ " (j/k:nav x:toggle)") <-> vcat subtask_lines), progress)
          in
          let _ = progress_str in (* suppress unused warning *)
+         (* Attachments section *)
+         let attachments_section = 
+           if model.current_attachments = [] then I.empty
+           else
+             let att_lines = List.mapi (fun i (att : Domain.Types.attachment) ->
+               let selected = i = model.attachment_index && model.attachment_index >= 0 in
+               let prefix = if selected then "    ▶ " else "      " in
+               let attr = if selected then A.(fg white ++ st bold) else A.(fg (gray 14)) in
+               let size_str = 
+                 if att.size_bytes < 1024L then Printf.sprintf "%Ld B" att.size_bytes
+                 else if att.size_bytes < 1048576L then Printf.sprintf "%.1f KB" (Int64.to_float att.size_bytes /. 1024.)
+                 else Printf.sprintf "%.1f MB" (Int64.to_float att.size_bytes /. 1048576.)
+               in
+               I.string attr (Printf.sprintf "%s📎 %s (%s)" prefix att.filename size_str)
+             ) model.current_attachments in
+             I.(void 0 1 <-> string A.(st bold ++ fg yellow) "  Attachments: (A:add Enter:open d:delete)" <-> vcat att_lines)
+         in
+         (* Links section *)
+         let links_section = 
+           if model.current_links = [] then I.empty
+           else
+             let link_lines = List.mapi (fun i (link : Domain.Types.link) ->
+               let selected = i = model.link_index in
+               let attr = if selected then A.(fg white ++ bg blue) else A.(fg cyan) in
+               let prefix = if selected then "    ▶ " else "      " in
+               let (other_type, other_id) = 
+                 if link.target_id = id then (link.source_type, link.source_id)
+                 else (link.target_type, link.target_id)
+               in
+               let name = match other_type with
+                 | "task" -> (match List.find_opt (fun (t : Domain.Types.task) -> t.id = other_id) model.tasks with Some t -> "📋 " ^ t.title | None -> "📋 (unknown)")
+                 | "note" -> (match List.find_opt (fun (n : Domain.Types.note) -> n.id = other_id) model.notes with Some n -> "📝 " ^ n.title | None -> "📝 (unknown)")
+                 | "project" -> (match List.find_opt (fun (p : Domain.Types.project) -> p.id = other_id) model.projects with Some p -> "📁 " ^ p.name | None -> "📁 (unknown)")
+                 | "event" -> (match List.find_opt (fun (e : Domain.Types.event) -> e.id = other_id) model.events with Some e -> "📅 " ^ e.title | None -> "📅 (unknown)")
+                 | "contact" -> (match List.find_opt (fun (c : Domain.Types.contact) -> c.id = other_id) model.contacts with Some c -> "👤 " ^ c.name | None -> "👤 (unknown)")
+                 | _ -> "🔗 " ^ other_type
+               in
+               I.string attr (prefix ^ name)
+             ) model.current_links in
+             I.(void 0 1 <-> string A.(st bold ++ fg cyan) "  🔗 Links: (L:add)" <-> vcat link_lines)
+         in
          I.(
            void 0 1 <->
            string A.(st bold) ("  " ^ task.Domain.Types.title) <->
@@ -406,17 +515,60 @@ let render model (width, height) =
            (if tags_str = "" then empty else string A.(fg cyan) ("  " ^ tags_str)) <->
            void 0 1 <->
            (if notes_str = "" then string A.(fg (gray 12)) "  (no notes)" else string A.empty ("  " ^ notes_str)) <->
-           subtasks_section
+           subtasks_section <->
+           attachments_section <->
+           links_section
          )
        | None -> I.string A.(fg red) "Task not found")
     | NoteDetail id ->
       (match List.find_opt (fun (n : Domain.Types.note) -> n.Domain.Types.id = id) model.notes with
        | Some note ->
+         let attachments_section = 
+           if model.current_attachments = [] then I.empty
+           else
+             let att_lines = List.mapi (fun i (att : Domain.Types.attachment) ->
+               let selected = i = model.attachment_index in
+               let prefix = if selected then "    ▶ " else "      " in
+               let attr = if selected then A.(fg white ++ st bold) else A.(fg (gray 14)) in
+               let size_str = 
+                 if att.size_bytes < 1024L then Printf.sprintf "%Ld B" att.size_bytes
+                 else if att.size_bytes < 1048576L then Printf.sprintf "%.1f KB" (Int64.to_float att.size_bytes /. 1024.)
+                 else Printf.sprintf "%.1f MB" (Int64.to_float att.size_bytes /. 1048576.)
+               in
+               I.string attr (Printf.sprintf "%s📎 %s (%s)" prefix att.filename size_str)
+             ) model.current_attachments in
+             I.(void 0 1 <-> string A.(st bold ++ fg yellow) "  Attachments: (A:add Enter:open d:delete)" <-> vcat att_lines)
+         in
+         let links_section = 
+           if model.current_links = [] then I.empty
+           else
+             let link_lines = List.mapi (fun i (link : Domain.Types.link) ->
+               let selected = i = model.link_index in
+               let attr = if selected then A.(fg white ++ bg blue) else A.(fg cyan) in
+               let prefix = if selected then "    ▶ " else "      " in
+               let (other_type, other_id) = 
+                 if link.target_id = id then (link.source_type, link.source_id)
+                 else (link.target_type, link.target_id)
+               in
+               let name = match other_type with
+                 | "task" -> (match List.find_opt (fun (t : Domain.Types.task) -> t.id = other_id) model.tasks with Some t -> "📋 " ^ t.title | None -> "📋 (unknown)")
+                 | "note" -> (match List.find_opt (fun (n : Domain.Types.note) -> n.id = other_id) model.notes with Some n -> "📝 " ^ n.title | None -> "📝 (unknown)")
+                 | "project" -> (match List.find_opt (fun (p : Domain.Types.project) -> p.id = other_id) model.projects with Some p -> "📁 " ^ p.name | None -> "📁 (unknown)")
+                 | "event" -> (match List.find_opt (fun (e : Domain.Types.event) -> e.id = other_id) model.events with Some e -> "📅 " ^ e.title | None -> "📅 (unknown)")
+                 | "contact" -> (match List.find_opt (fun (c : Domain.Types.contact) -> c.id = other_id) model.contacts with Some c -> "👤 " ^ c.name | None -> "👤 (unknown)")
+                 | _ -> "🔗 " ^ other_type
+               in
+               I.string attr (prefix ^ name)
+             ) model.current_links in
+             I.(void 0 1 <-> string A.(st bold ++ fg cyan) "  🔗 Links: (L:add)" <-> vcat link_lines)
+         in
          I.(
            void 0 1 <->
            string A.(st bold) note.Domain.Types.title <->
            void 0 1 <->
-           string A.empty note.Domain.Types.content
+           string A.empty note.Domain.Types.content <->
+           attachments_section <->
+           links_section
          )
        | None -> I.string A.(fg red) "Note not found")
     | Calendar ->
@@ -476,7 +628,7 @@ let render model (width, height) =
       (match model.form with
        | Some form -> 
          let title = if id_opt = None then "New Event" else "Edit Event" in
-         render_form ~title form
+         render_form ~title form width
        | None -> I.string A.(fg red) "  Form not initialized")
     | ContactList ->
       if List.length model.contacts = 0 then
@@ -508,7 +660,7 @@ let render model (width, height) =
       (match model.form with
        | Some form -> 
          let title = if id_opt = None then "New Contact" else "Edit Contact" in
-         render_form ~title form
+         render_form ~title form width
        | None -> I.string A.(fg red) "  Form not initialized")
     | Projects ->
       if List.length model.projects = 0 then
@@ -533,32 +685,66 @@ let render model (width, height) =
            | `Someday -> "Someday"
            | `Archived -> "Archived"
          in
+         (* Display linked items *)
+         let link_lines = if model.current_links = [] then
+           [I.string A.(fg (gray 12)) "    No linked items"]
+         else
+           List.mapi (fun i (link : Domain.Types.link) ->
+             let selected = i = model.link_index in
+             let attr = if selected then A.(fg white ++ bg blue) else A.(fg cyan) in
+             let prefix = if selected then "  ▶ " else "    " in
+             (* Find the linked entity name *)
+             let (other_type, other_id) = 
+               if link.target_id = id then (link.source_type, link.source_id)
+               else (link.target_type, link.target_id)
+             in
+             let name = match other_type with
+               | "task" -> 
+                 (match List.find_opt (fun (t : Domain.Types.task) -> t.id = other_id) model.tasks with
+                  | Some t -> "📋 " ^ t.title | None -> "📋 (unknown task)")
+               | "note" ->
+                 (match List.find_opt (fun (n : Domain.Types.note) -> n.id = other_id) model.notes with
+                  | Some n -> "📝 " ^ n.title | None -> "📝 (unknown note)")
+               | "event" ->
+                 (match List.find_opt (fun (e : Domain.Types.event) -> e.id = other_id) model.events with
+                  | Some e -> "📅 " ^ e.title | None -> "📅 (unknown event)")
+               | "contact" ->
+                 (match List.find_opt (fun (c : Domain.Types.contact) -> c.id = other_id) model.contacts with
+                  | Some c -> "👤 " ^ c.name | None -> "👤 (unknown contact)")
+               | _ -> "🔗 " ^ other_type
+             in
+             I.string attr (prefix ^ name)
+           ) model.current_links
+         in
          I.(
            void 0 1 <->
            string A.(st bold) ("  " ^ project.name) <->
            void 0 1 <->
            string A.empty ("  Status: " ^ status_str) <->
            void 0 1 <->
-           string A.empty ("  " ^ Option.value ~default:"" project.description)
+           string A.empty ("  " ^ Option.value ~default:"" project.description) <->
+           void 0 1 <->
+           string A.(st bold ++ fg cyan) "  🔗 Linked Items:" <->
+           vcat link_lines
          )
        | None -> I.string A.(fg red) "  Project not found")
     | ProjectEdit id_opt ->
       (match model.form with
        | Some form -> 
          let title = if id_opt = None then "New Project" else "Edit Project" in
-         render_form ~title form
+         render_form ~title form width
        | None -> I.string A.(fg red) "  Form not initialized")
     | TaskEdit id_opt ->
       (match model.form with
        | Some form -> 
          let title = if id_opt = None then "New Task" else "Edit Task" in
-         render_form ~title form
+         render_form ~title form width
        | None -> I.string A.(fg red) "  Form not initialized")
     | NoteEdit id_opt ->
       (match model.form with
        | Some form -> 
          let title = if id_opt = None then "New Note" else "Edit Note" in
-         render_form ~title form
+         render_form ~title form width
        | None -> I.string A.(fg red) "  Form not initialized")
     | Archive ->
       (* Render archived/deleted items *)
@@ -602,6 +788,26 @@ let render model (width, height) =
         I.string attr (prefix ^ icon ^ title)
       ) model.search_results in
       I.vcat ([search_line; result_count; I.void 0 1] @ result_lines)
+    | LinkPicker (source_type, _source_id) ->
+      (* Show list of linkable items - notes, projects, contacts, other tasks *)
+      let header_line = I.(void 0 1 <-> string A.(st bold ++ fg cyan) "  🔗 Link to..." <-> void 0 1) in
+      let type_hint = I.string A.(fg (gray 12)) "  Press: n=Notes  p=Projects  c=Contacts  t=Tasks  Esc=Cancel" in
+      (* Build list of items based on what we're linking from *)
+      let items = 
+        List.mapi (fun i (n : Domain.Types.note) -> (i, "note", n.id, "📝 " ^ n.title)) model.notes @
+        List.mapi (fun i (p : Domain.Types.project) -> (i + List.length model.notes, "project", p.id, "📁 " ^ p.name)) model.projects @
+        List.mapi (fun i (c : Domain.Types.contact) -> (i + List.length model.notes + List.length model.projects, "contact", c.id, "👤 " ^ c.name)) model.contacts @
+        (if source_type <> "task" then 
+          List.mapi (fun i (t : Domain.Types.task) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts, "task", t.id, "📋 " ^ t.title)) model.tasks
+        else [])
+      in
+      let item_lines = List.map (fun (i, _typ, _id, title) ->
+        let selected = i = model.selected_index in
+        let attr = if selected then A.(fg white ++ bg blue) else A.empty in
+        let prefix = if selected then " ▶ " else "   " in
+        I.string attr (prefix ^ title)
+      ) items in
+      I.vcat ([header_line; type_hint; I.void 0 1] @ item_lines)
   in
   let content_area = I.vsnap ~align:`Top content_height content in
   I.(header <-> content_area <-> footer)
@@ -617,20 +823,92 @@ let handle_key model key =
     `Continue (update model ExitInsertMode)
   | `ASCII 'j' | `Arrow `Down when model.input_mode = Normal -> 
     (match model.view with
+     | LinkPicker (source_type, _) ->
+       (* Navigate linkable items *)
+       let num_items = 
+         List.length model.notes + List.length model.projects + List.length model.contacts +
+         (if source_type <> "task" then List.length model.tasks else 0)
+       in
+       let new_idx = min (model.selected_index + 1) (num_items - 1) in
+       `Continue { model with selected_index = max 0 new_idx }
      | TaskDetail id ->
-       (* Navigate subtasks in task detail view *)
+       (* Navigate: subtasks first, then attachments *)
        let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some id) model.tasks in
-       let max_idx = max 0 (List.length subtasks - 1) in
-       let new_idx = min (model.subtask_index + 1) max_idx in
-       `Continue { model with subtask_index = new_idx }
+       let num_subtasks = List.length subtasks in
+       let num_attachments = List.length model.current_attachments in
+       (* Combined navigation: subtask_index 0..n-1 for subtasks, then attachment_index for attachments *)
+       if num_subtasks > 0 && model.subtask_index < num_subtasks - 1 then
+         (* Still navigating subtasks *)
+         `Continue { model with subtask_index = model.subtask_index + 1 }
+       else if num_subtasks > 0 && model.subtask_index = num_subtasks - 1 && num_attachments > 0 && model.attachment_index = -1 then
+         (* Move from last subtask to first attachment *)
+         `Continue { model with attachment_index = 0 }
+       else if num_attachments > 0 && model.attachment_index >= 0 && model.attachment_index < num_attachments - 1 then
+         (* Navigate attachments *)
+         `Continue { model with attachment_index = model.attachment_index + 1 }
+       else if num_subtasks = 0 && num_attachments > 0 then
+         (* No subtasks, just attachments *)
+         let new_idx = min (model.attachment_index + 1) (num_attachments - 1) in
+         `Continue { model with attachment_index = max 0 new_idx }
+       else
+         `Continue model
+     | NoteDetail _ ->
+       (* Navigate attachments in note detail *)
+       if model.current_attachments <> [] then
+         let max_idx = max 0 (List.length model.current_attachments - 1) in
+         let new_idx = min (model.attachment_index + 1) max_idx in
+         `Continue { model with attachment_index = max 0 new_idx }
+       else
+         `Continue model
+     | ProjectDetail _ ->
+       (* Navigate links in project detail *)
+       if model.current_links <> [] then
+         let max_idx = max 0 (List.length model.current_links - 1) in
+         let new_idx = min (model.link_index + 1) max_idx in
+         `Continue { model with link_index = new_idx }
+       else
+         `Continue model
      | _ -> `Continue (update model SelectNext))
   | `ASCII 'k' | `Arrow `Up when model.input_mode = Normal -> 
     (match model.view with
+     | LinkPicker _ ->
+       (* Navigate linkable items *)
+       let new_idx = max 0 (model.selected_index - 1) in
+       `Continue { model with selected_index = new_idx }
      | TaskDetail id ->
-       (* Navigate subtasks in task detail view *)
-       let _ = id in (* suppress unused warning *)
-       let new_idx = max 0 (model.subtask_index - 1) in
-       `Continue { model with subtask_index = new_idx }
+       (* Navigate: attachments first (going up), then subtasks *)
+       let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some id) model.tasks in
+       let num_subtasks = List.length subtasks in
+       let num_attachments = List.length model.current_attachments in
+       if num_attachments > 0 && model.attachment_index > 0 then
+         (* Still navigating attachments *)
+         `Continue { model with attachment_index = model.attachment_index - 1 }
+       else if num_attachments > 0 && model.attachment_index = 0 && num_subtasks > 0 then
+         (* Move from first attachment back to last subtask *)
+         `Continue { model with attachment_index = -1; subtask_index = num_subtasks - 1 }
+       else if num_subtasks > 0 && model.attachment_index < 0 && model.subtask_index > 0 then
+         (* Navigate subtasks *)
+         `Continue { model with subtask_index = model.subtask_index - 1 }
+       else if num_subtasks = 0 && num_attachments > 0 then
+         (* No subtasks, just attachments *)
+         let new_idx = max 0 (model.attachment_index - 1) in
+         `Continue { model with attachment_index = new_idx }
+       else
+         `Continue model
+     | NoteDetail _ ->
+       (* Navigate attachments in note detail *)
+       if model.current_attachments <> [] then
+         let new_idx = max 0 (model.attachment_index - 1) in
+         `Continue { model with attachment_index = new_idx }
+       else
+         `Continue model
+     | ProjectDetail _ ->
+       (* Navigate links in project detail *)
+       if model.current_links <> [] then
+         let new_idx = max 0 (model.link_index - 1) in
+         `Continue { model with link_index = new_idx }
+       else
+         `Continue model
      | _ -> `Continue (update model SelectPrev))
   | `ASCII 'g' when model.input_mode = Normal -> 
     `Continue (update model SelectFirst)
@@ -649,6 +927,26 @@ let handle_key model key =
             subtask_index = 0;
           }
         | None -> `Continue model)
+     | ProjectDetail id ->
+       (* Open selected linked item *)
+       (match List.nth_opt model.current_links model.link_index with
+        | Some link ->
+          let (other_type, other_id) = 
+            if link.target_id = id then (link.source_type, link.source_id)
+            else (link.target_type, link.target_id)
+          in
+          let new_view = match other_type with
+            | "task" -> Some (TaskDetail other_id)
+            | "note" -> Some (NoteDetail other_id)
+            | "event" -> Some (EventDetail other_id)
+            | "contact" -> Some (ContactDetail other_id)
+            | "project" -> Some (ProjectDetail other_id)
+            | _ -> None
+          in
+          (match new_view with
+           | Some v -> `Continue { model with view = v; previous_views = model.view :: model.previous_views }
+           | None -> `Continue model)
+        | None -> `Continue model)
      | _ -> `Continue (update model OpenSelected))
   | `ASCII 'n' when model.input_mode = Normal -> 
     `Continue (update model CreateNew)
@@ -662,6 +960,20 @@ let handle_key model key =
     `Continue (update model DeleteSelected)
   | `ASCII 'D' when model.input_mode = Normal -> 
     `Continue (update model DailyNote)
+  | `ASCII 'L' when model.input_mode = Normal ->
+    (* Open link picker from detail views *)
+    (match model.view with
+     | TaskDetail id -> 
+       `Continue { model with view = LinkPicker ("task", id); selected_index = 0; previous_views = model.view :: model.previous_views }
+     | NoteDetail id -> 
+       `Continue { model with view = LinkPicker ("note", id); selected_index = 0; previous_views = model.view :: model.previous_views }
+     | EventDetail id -> 
+       `Continue { model with view = LinkPicker ("event", id); selected_index = 0; previous_views = model.view :: model.previous_views }
+     | ContactDetail id -> 
+       `Continue { model with view = LinkPicker ("contact", id); selected_index = 0; previous_views = model.view :: model.previous_views }
+     | ProjectDetail id -> 
+       `Continue { model with view = LinkPicker ("project", id); selected_index = 0; previous_views = model.view :: model.previous_views }
+     | _ -> `Continue model)
   | `ASCII 'x' when model.input_mode = Normal -> 
     (match model.view with
      | TaskDetail task_id ->
@@ -819,6 +1131,12 @@ let run ~config () =
   let sync_online, pool, remote_pool = match db_ctx with
     | Ok ctx -> ctx.Storage.Db.remote_available, Some (Storage.Db.local ctx), Storage.Db.remote ctx
     | Error _ -> false, None, None
+  in
+  (* Run bidirectional sync if both local and remote are available *)
+  let* () = match pool, remote_pool with
+    | Some local_pool, Some remote_pool ->
+      Storage.Sync.run ~local_pool ~remote_pool
+    | _ -> Lwt.return ()
   in
   (* Use remote pool if available, otherwise local *)
   let db_pool = match remote_pool with Some p -> Some p | None -> pool in
@@ -1226,6 +1544,15 @@ let run ~config () =
          let status = Some { text = "Event permanently deleted"; level = `Success; expires_at = None } in
          Lwt.return { model with archived_events; status; selected_index = max 0 (model.selected_index - 1) }
        | None -> Lwt.return model)
+    | ProjectDetail id, Some p ->
+      (* Delete selected link *)
+      (match List.nth_opt model.current_links model.link_index with
+       | Some link ->
+         let* _result = Storage.Queries.delete_link p ~id:link.Domain.Types.id in
+         let* links = Storage.Queries.list_links_for_entity p ~entity_type:"project" ~entity_id:id in
+         let status = Some { text = "Link deleted"; level = `Success; expires_at = None } in
+         Lwt.return { model with current_links = links; link_index = max 0 (model.link_index - 1); status }
+       | None -> Lwt.return model)
     | _ ->
       let status = Some { text = "Cannot delete from this view"; level = `Warning; expires_at = None } in
       Lwt.return { model with status }
@@ -1248,6 +1575,52 @@ let run ~config () =
           | _ ->
             let* new_model = save_and_update model in
             loop new_model)
+       | `Enter, Command ->
+         (* Handle command mode input - currently used for file attachment *)
+         (match model.view, db_pool with
+          | (TaskDetail entity_id | NoteDetail entity_id), Some p ->
+            let filepath = String.trim model.input_buffer in
+            if filepath = "" then
+              loop { model with input_mode = Normal; input_buffer = ""; status = Some { text = "Cancelled"; level = `Info; expires_at = None } }
+            else if not (Sys.file_exists filepath) then
+              loop { model with status = Some { text = "File not found: " ^ filepath; level = `Error; expires_at = None } }
+            else
+              let filename = Filename.basename filepath in
+              let size_bytes = (Unix.stat filepath).Unix.st_size |> Int64.of_int in
+              let entity_type = match model.view with TaskDetail _ -> "task" | NoteDetail _ -> "note" | _ -> "task" in
+              (* Copy file to attachments directory *)
+              let attachments_dir = Filename.concat (Sys.getenv "HOME") ".local/share/parenvault/attachments" in
+              let () = if not (Sys.file_exists attachments_dir) then Unix.mkdir attachments_dir 0o755 in
+              let dest_filename = Printf.sprintf "%s_%s" (Storage.Queries.new_uuid ()) filename in
+              let dest_path = Filename.concat attachments_dir dest_filename in
+              let () = 
+                let ic = open_in_bin filepath in
+                let oc = open_out_bin dest_path in
+                try
+                  let buf = Bytes.create 4096 in
+                  let rec copy () =
+                    let n = input ic buf 0 4096 in
+                    if n > 0 then (output oc buf 0 n; copy ())
+                  in
+                  copy ();
+                  close_in ic;
+                  close_out oc
+                with e -> close_in ic; close_out oc; raise e
+              in
+              let* _result = Storage.Queries.create_attachment p ~filename ~filepath:dest_filename ~size_bytes ~entity_type ~entity_id () in
+              let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type ~entity_id in
+              let status = Some { text = "Attached: " ^ filename; level = `Success; expires_at = None } in
+              loop { model with input_mode = Normal; input_buffer = ""; current_attachments = attachments; status }
+          | _ ->
+            loop { model with input_mode = Normal; input_buffer = ""; status = Some { text = "Cannot attach here"; level = `Warning; expires_at = None } })
+       | `Escape, Command ->
+         loop { model with input_mode = Normal; input_buffer = ""; status = None }
+       | `ASCII c, Command ->
+         loop { model with input_buffer = model.input_buffer ^ String.make 1 c }
+       | `Backspace, Command ->
+         let len = String.length model.input_buffer in
+         let new_buf = if len > 0 then String.sub model.input_buffer 0 (len - 1) else "" in
+         loop { model with input_buffer = new_buf }
        | `ASCII 'd', Normal ->
          let* new_model = delete_and_update model in
          loop new_model
@@ -1290,6 +1663,16 @@ let run ~config () =
                 | None -> loop model)
              | None -> loop model)
           | _ -> loop model)
+       | `ASCII 'A', Normal ->
+         (* Add attachment - prompt for file path *)
+         (match model.view with
+          | TaskDetail _ | NoteDetail _ ->
+            (* Enter command mode to get file path *)
+            let status = Some { text = "Enter file path (or drag file): "; level = `Info; expires_at = None } in
+            loop { model with input_mode = Command; input_buffer = ""; status }
+          | _ ->
+            let status = Some { text = "Attachments only work in Task/Note detail views"; level = `Warning; expires_at = None } in
+            loop { model with status })
        | `ASCII 'r', Normal ->
          (* Restore from archive *)
          (match model.view, db_pool with
@@ -1322,6 +1705,99 @@ let run ~config () =
           | _ -> 
             let status = Some { text = "Restore only works in Archive view (press 9)"; level = `Warning; expires_at = None } in
             loop { model with status })
+       | `ASCII 'o', Normal ->
+         (* Open attachment with xdg-open *)
+         (match model.view with
+          | TaskDetail _ | NoteDetail _ when model.current_attachments <> [] ->
+            (match List.nth_opt model.current_attachments model.attachment_index with
+             | Some att ->
+               let attachments_dir = Filename.concat (Sys.getenv "HOME") ".local/share/parenvault/attachments" in
+               let full_path = Filename.concat attachments_dir att.Domain.Types.filepath in
+               let _ = Unix.create_process "xdg-open" [|"xdg-open"; full_path|] Unix.stdin Unix.stdout Unix.stderr in
+               let status = Some { text = "Opening: " ^ att.filename; level = `Info; expires_at = None } in
+               loop { model with status }
+             | None -> loop model)
+          | _ -> loop model)
+       | `Enter, Normal ->
+         (* Handle Enter key - load attachments when opening detail views *)
+         (match model.view, db_pool with
+          | LinkPicker (source_type, source_id), Some p ->
+            (* Create link to selected item *)
+            let items = 
+              List.mapi (fun i (n : Domain.Types.note) -> (i, "note", n.id)) model.notes @
+              List.mapi (fun i (pr : Domain.Types.project) -> (i + List.length model.notes, "project", pr.id)) model.projects @
+              List.mapi (fun i (c : Domain.Types.contact) -> (i + List.length model.notes + List.length model.projects, "contact", c.id)) model.contacts @
+              (if source_type <> "task" then 
+                List.mapi (fun i (t : Domain.Types.task) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts, "task", t.id)) model.tasks
+              else [])
+            in
+            Printf.eprintf "LinkPicker: selected_index=%d, items=%d, notes=%d, projects=%d, contacts=%d\n%!" 
+              model.selected_index (List.length items) (List.length model.notes) (List.length model.projects) (List.length model.contacts);
+            (match List.find_opt (fun (i, _, _) -> i = model.selected_index) items with
+             | Some (_, target_type, target_id) ->
+               let* link_id = Storage.Queries.create_link p ~source_type ~source_id ~target_type ~target_id ~link_type:"related" in
+               let status_text = match link_id with
+                 | Some id -> Printf.sprintf "Linked to %s (id: %s)" target_type (String.sub id 0 8)
+                 | None -> Printf.sprintf "Failed to link to %s" target_type
+               in
+               let level = if link_id = None then `Error else `Success in
+               let status = Some { text = status_text; level; expires_at = None } in
+               let new_view = match model.previous_views with v :: _ -> v | [] -> Dashboard in
+               let prev = match model.previous_views with _ :: rest -> rest | [] -> [] in
+               loop { model with view = new_view; previous_views = prev; status }
+             | None -> 
+               Printf.eprintf "No item found at index %d\n%!" model.selected_index;
+               loop model)
+          | (TaskList | Inbox | Dashboard | NoteList | Calendar | Projects), Some p ->
+            let new_model = Update.update model OpenSelected in
+            (* Load attachments/links for the new view *)
+            (match new_model.view with
+             | TaskDetail id ->
+               let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:id in
+               let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:id in
+               (* Start with attachment_index=-1 if there are subtasks, so navigation starts from subtasks *)
+               let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some id) new_model.tasks in
+               let att_idx = if subtasks <> [] then -1 else 0 in
+               loop { new_model with current_attachments = attachments; attachment_index = att_idx; current_links = links; link_index = 0 }
+             | NoteDetail id ->
+               let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"note" ~entity_id:id in
+               let* links = Storage.Queries.list_links_for_entity p ~entity_type:"note" ~entity_id:id in
+               loop { new_model with current_attachments = attachments; attachment_index = 0; current_links = links; link_index = 0 }
+             | ProjectDetail id ->
+               let* links = Storage.Queries.list_links_for_entity p ~entity_type:"project" ~entity_id:id in
+               loop { new_model with current_links = links; link_index = 0 }
+             | _ -> loop new_model)
+          | ProjectDetail id, Some p ->
+            (* Open linked item from project detail *)
+            (match List.nth_opt model.current_links model.link_index with
+             | Some link ->
+               let (other_type, other_id) = 
+                 if link.Domain.Types.target_id = id then (link.source_type, link.source_id)
+                 else (link.target_type, link.target_id)
+               in
+               (match other_type with
+                | "task" ->
+                  let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:other_id in
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:other_id in
+                  let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some other_id) model.tasks in
+                  let att_idx = if subtasks <> [] then -1 else 0 in
+                  loop { model with view = TaskDetail other_id; previous_views = model.view :: model.previous_views; current_attachments = attachments; attachment_index = att_idx; current_links = links; link_index = 0 }
+                | "note" ->
+                  let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"note" ~entity_id:other_id in
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"note" ~entity_id:other_id in
+                  loop { model with view = NoteDetail other_id; previous_views = model.view :: model.previous_views; current_attachments = attachments; attachment_index = 0; current_links = links; link_index = 0 }
+                | "project" ->
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"project" ~entity_id:other_id in
+                  loop { model with view = ProjectDetail other_id; previous_views = model.view :: model.previous_views; current_links = links; link_index = 0 }
+                | "event" ->
+                  loop { model with view = EventDetail other_id; previous_views = model.view :: model.previous_views }
+                | "contact" ->
+                  loop { model with view = ContactDetail other_id; previous_views = model.view :: model.previous_views }
+                | _ -> loop model)
+             | None -> loop model)
+          | _ ->
+            let new_model = Update.update model OpenSelected in
+            loop new_model)
        | _ ->
          (match handle_key model key with
           | `Quit -> 

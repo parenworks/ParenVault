@@ -144,6 +144,31 @@ let delete_task pool ~id =
   | Ok () -> Lwt.return true
   | Error _ -> Lwt.return false
 
+(* Upsert task for sync - insert or update based on existence *)
+let upsert_task_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 string (t2 (option ptime) (t2 (option ptime) (t2 (option string) (t2 (option string) (t2 (option string) (t2 ptime (t2 string (t2 ptime bool)))))))))))))) ->. T.unit)
+  "INSERT INTO tasks (id, title, description, status, priority, tags, due_date, scheduled_date, recurrence, project_id, parent_id, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     title = excluded.title, description = excluded.description, status = excluded.status, 
+     priority = excluded.priority, tags = excluded.tags, due_date = excluded.due_date,
+     scheduled_date = excluded.scheduled_date, recurrence = excluded.recurrence,
+     project_id = excluded.project_id, parent_id = excluded.parent_id,
+     sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted,
+     sync_version = sync_version + 1"
+
+let upsert_task pool (task : task) =
+  let status_str = task_status_to_string task.status in
+  let priority_str = priority_to_string task.priority in
+  let tags_json = `List (List.map (fun t -> `String t) task.tags) |> Yojson.Safe.to_string in
+  let due = Option.map (fun (ts : timestamp) -> ts.time) task.due_date in
+  let sched = Option.map (fun (ts : timestamp) -> ts.time) task.scheduled_date in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_task_query (task.id, (task.title, (task.description, (status_str, (priority_str, (tags_json, (due, (sched, (task.recurrence, (task.project_id, (task.parent_id, (task.created_at.time, (task.sync.local_id, (task.sync.modified_at.time, task.sync.deleted))))))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
 (* ============================================
    NOTE QUERIES
    ============================================ *)
@@ -202,6 +227,24 @@ let permanent_delete_note_query = Q.(T.string ->. T.unit)
 let permanent_delete_note pool ~id =
   let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
     C.exec permanent_delete_note_query id
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+(* Upsert note for sync *)
+let upsert_note_query = Q.(T.(t2 string (t2 string (t2 string (t2 string (t2 (option string) (t2 ptime (t2 string (t2 ptime bool)))))))) ->. T.unit)
+  "INSERT INTO notes (id, title, content, tags, project_id, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     title = excluded.title, content = excluded.content, tags = excluded.tags,
+     project_id = excluded.project_id, sync_modified_at = excluded.sync_modified_at, 
+     sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+
+let upsert_note pool (note : note) =
+  let tags_json = `List (List.map (fun t -> `String t) note.tags) |> Yojson.Safe.to_string in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_note_query (note.id, (note.title, (note.content, (tags_json, (note.project_id, (note.created_at.time, (note.sync.local_id, (note.sync.modified_at.time, note.sync.deleted))))))))
   ) in
   match result with
   | Ok () -> Lwt.return true
@@ -308,6 +351,26 @@ let permanent_delete_event_query = Q.(T.string ->. T.unit)
 let permanent_delete_event pool ~id =
   let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
     C.exec permanent_delete_event_query id
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+(* Upsert event for sync *)
+let upsert_event_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 ptime (t2 (option ptime) (t2 (option string) (t2 string (t2 (option string) (t2 ptime (t2 string (t2 ptime bool))))))))))) ->. T.unit)
+  "INSERT INTO events (id, title, description, start_time, end_time, location, tags, recurrence, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     title = excluded.title, description = excluded.description, start_time = excluded.start_time,
+     end_time = excluded.end_time, location = excluded.location, tags = excluded.tags,
+     recurrence = excluded.recurrence, sync_modified_at = excluded.sync_modified_at, 
+     sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+
+let upsert_event pool (event : event) =
+  let tags_json = `List (List.map (fun t -> `String t) event.tags) |> Yojson.Safe.to_string in
+  let end_t = Option.map (fun (ts : timestamp) -> ts.time) event.end_time in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_event_query (event.id, (event.title, (event.description, (event.start_time.time, (end_t, (event.location, (tags_json, (event.recurrence, (event.created_at.time, (event.sync.local_id, (event.sync.modified_at.time, event.sync.deleted)))))))))))
   ) in
   match result with
   | Ok () -> Lwt.return true
@@ -469,3 +532,161 @@ let create_project pool ~name ?description ?(status="active") ?(tags=[]) ?parent
   match result with
   | Ok () -> Lwt.return (Some id)
   | Error _ -> Lwt.return None
+
+(* ==================== Attachments ==================== *)
+
+let attachment_of_row (id, (filename, (filepath, (mime_type, (size_bytes, (entity_type, (entity_id, created_at))))))) =
+  let open Domain.Types in
+  {
+    id;
+    filename;
+    filepath;
+    mime_type;
+    size_bytes;
+    entity_type;
+    entity_id;
+    created_at = { time = created_at; timezone = None };
+    sync = { local_id = id; version = 1; modified_at = { time = created_at; timezone = None }; synced_at = None; deleted = false };
+  }
+
+let attachment_row_type = T.(t2 string (t2 string (t2 string (t2 (option string) (t2 int64 (t2 string (t2 string ptime)))))))
+
+let list_attachments_for_entity_query = Q.(T.(t2 string string) ->* attachment_row_type)
+  "SELECT id, filename, filepath, mime_type, size_bytes, entity_type, entity_id, created_at FROM attachments WHERE entity_type = ? AND entity_id = ? AND NOT sync_deleted ORDER BY created_at DESC"
+
+let list_attachments_for_entity pool ~entity_type ~entity_id =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_attachments_for_entity_query (entity_type, entity_id)
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map attachment_of_row rows)
+  | Error _ -> Lwt.return []
+
+let insert_attachment_query = Q.(T.(t2 string (t2 string (t2 string (t2 (option string) (t2 int64 (t2 string (t2 string (t2 ptime (t2 string ptime))))))))) ->. T.unit)
+  "INSERT INTO attachments (id, filename, filepath, mime_type, size_bytes, entity_type, entity_id, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
+
+let create_attachment pool ~filename ~filepath ?mime_type ~size_bytes ~entity_type ~entity_id () =
+  let id = new_uuid () in
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec insert_attachment_query (id, (filename, (filepath, (mime_type, (size_bytes, (entity_type, (entity_id, (now, (id, now)))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return (Some id)
+  | Error _ -> Lwt.return None
+
+let delete_attachment_query = Q.(T.(t2 ptime string) ->. T.unit)
+  "UPDATE attachments SET sync_deleted = true, sync_modified_at = ? WHERE id = ?"
+
+let delete_attachment pool ~id =
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec delete_attachment_query (now, id)
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let permanent_delete_attachment_query = Q.(T.string ->. T.unit)
+  "DELETE FROM attachments WHERE id = ?"
+
+let permanent_delete_attachment pool ~id =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec permanent_delete_attachment_query id
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+(* ============================================
+   LINK QUERIES
+   ============================================ *)
+
+let link_of_row (id, (source_type, (source_id, (target_type, (target_id, (link_type, (created_at, (local_id, (modified_at, deleted))))))))) =
+  let open Domain.Types in
+  {
+    id;
+    source_type;
+    source_id;
+    target_type;
+    target_id;
+    link_type;
+    created_at = { time = created_at; timezone = None };
+    sync = {
+      local_id;
+      version = 1;
+      modified_at = { time = modified_at; timezone = None };
+      synced_at = None;
+      deleted;
+    };
+  }
+
+let list_links_for_entity_query = Q.(T.(t2 string (t2 string (t2 string string))) ->* T.(t2 string (t2 string (t2 string (t2 string (t2 string (t2 string (t2 ptime (t2 string (t2 ptime bool))))))))))
+  "SELECT id, source_type, source_id, target_type, target_id, link_type, created_at, sync_local_id, sync_modified_at, sync_deleted 
+   FROM links WHERE ((source_type = ? AND source_id = ?) OR (target_type = ? AND target_id = ?)) AND NOT sync_deleted"
+
+let list_links_for_entity pool ~entity_type ~entity_id =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_links_for_entity_query (entity_type, (entity_id, (entity_type, entity_id)))
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map link_of_row rows)
+  | Error _ -> Lwt.return []
+
+let insert_link_query = Q.(T.(t2 string (t2 string (t2 string (t2 string (t2 string (t2 string (t2 ptime (t2 string ptime)))))))) ->. T.unit)
+  "INSERT INTO links (id, source_type, source_id, target_type, target_id, link_type, created_at, sync_local_id, sync_modified_at, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)"
+
+let create_link pool ~source_type ~source_id ~target_type ~target_id ~link_type =
+  let id = new_uuid () in
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec insert_link_query (id, (source_type, (source_id, (target_type, (target_id, (link_type, (now, (id, now))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return (Some id)
+  | Error e -> 
+    Printf.eprintf "Link creation error: %s\n%!" (Caqti_error.show e);
+    Lwt.return None
+
+let delete_link_query = Q.(T.(t2 ptime string) ->. T.unit)
+  "UPDATE links SET sync_deleted = true, sync_modified_at = ? WHERE id = ?"
+
+let delete_link pool ~id =
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec delete_link_query (now, id)
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+(* List all links including deleted for sync *)
+let list_all_links_query = Q.(T.unit ->* T.(t2 string (t2 string (t2 string (t2 string (t2 string (t2 string (t2 ptime (t2 string (t2 ptime bool))))))))))
+  "SELECT id, source_type, source_id, target_type, target_id, link_type, created_at, sync_local_id, sync_modified_at, sync_deleted FROM links"
+
+let list_all_links pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_all_links_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map link_of_row rows)
+  | Error _ -> Lwt.return []
+
+(* Upsert link for sync *)
+let upsert_link_query = Q.(T.(t2 string (t2 string (t2 string (t2 string (t2 string (t2 string (t2 ptime (t2 string (t2 ptime bool))))))))) ->. T.unit)
+  "INSERT INTO links (id, source_type, source_id, target_type, target_id, link_type, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     source_type = excluded.source_type, source_id = excluded.source_id,
+     target_type = excluded.target_type, target_id = excluded.target_id,
+     link_type = excluded.link_type, sync_modified_at = excluded.sync_modified_at, 
+     sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+
+let upsert_link pool (link : Domain.Types.link) =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_link_query (link.id, (link.source_type, (link.source_id, (link.target_type, (link.target_id, (link.link_type, (link.created_at.time, (link.sync.local_id, (link.sync.modified_at.time, link.sync.deleted)))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false

@@ -11,7 +11,7 @@ A checklist of planned features for the ParenVault PKM application.
 - [x] **Due Date Reminders** - Visual indicators for overdue/upcoming items (red=overdue, yellow=today)
 - [x] **Quick Capture** - Fast entry mode to dump thoughts into Inbox - Press `c` to capture
 - [x] **Task Scheduling** - Due Date (deadline) + Scheduled Date ("do on" date)
-- [ ] **Linking** - Connect tasks to projects, notes to contacts, etc.
+- [x] **Linking** - Connect tasks to projects, notes to contacts, etc. (L key to link, Enter to open, d to delete)
 
 ---
 
@@ -32,14 +32,14 @@ A checklist of planned features for the ParenVault PKM application.
 - [ ] **Export** - Markdown, JSON, CSV export
 - [x] **Sync Status** - Indicators: ●=local, ⟳=pending, ✓=synced
 - [ ] **Undo/Redo** - Revert recent changes
-- [ ] **Attachments** - Link files to notes/tasks
+- [x] **Attachments** - Link files to notes/tasks
 - [x] **Daily Notes** - Press `D` to open/create today's note (auto-tagged "daily")
 
 ---
 
 ## Workflow Considerations
 
-Since you're moving from pen and paper:
+Moving from pen and paper:
 
 - **Quick Capture** is essential - dump ideas fast, organize later
 - **Weekly Review** helps build the habit of processing your inbox
@@ -88,3 +88,7 @@ All initial sprint features are done:
 - [x] Archive view (`9` key) - view deleted tasks, notes, events
 - [x] Restore from archive (`r` key)
 - [x] Permanent delete from archive (`d` key)
+- [x] Attachments (`A` key to attach file, `o` to open, `j/k` to navigate)
+- [x] Auto schema creation on startup (tables created automatically on new machines)
+- [x] Bidirectional sync on startup (local ↔ remote PostgreSQL)
+- [x] Linking entities (`L` key to link, Enter to open linked item, `d` to delete link)

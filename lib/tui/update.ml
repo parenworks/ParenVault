@@ -106,6 +106,14 @@ let update model msg =
             previous_views = model.view :: model.previous_views;
           }
         | None -> model)
+     | Projects ->
+       (match List.nth_opt model.projects model.selected_index with
+        | Some project ->
+          { model with
+            view = ProjectDetail project.id;
+            previous_views = model.view :: model.previous_views;
+          }
+        | None -> model)
      | _ -> model)
   
   | QuickCapture ->
@@ -371,6 +379,18 @@ let update model msg =
      | Archive -> model  (* Actual restore happens in main loop *)
      | _ -> 
        { model with status = Some { text = "Restore only works in Archive view (press 9)"; level = `Warning; expires_at = None } })
+
+  | AddAttachment _ ->
+    (* Handled in main loop with DB access *)
+    model
+
+  | DeleteAttachment ->
+    (* Handled in main loop with DB access *)
+    model
+
+  | OpenAttachment ->
+    (* Handled in main loop - opens file with xdg-open *)
+    model
   
   | ToggleTaskStatus ->
     (* Toggle between Done and Todo for the selected task *)

@@ -149,6 +149,24 @@ CREATE TABLE IF NOT EXISTS links (
   UNIQUE(source_type, source_id, target_type, target_id, link_type)
 );
 
+-- Attachments
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  filename TEXT NOT NULL,
+  filepath TEXT NOT NULL,
+  mime_type TEXT,
+  size_bytes INTEGER NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
 -- Sync queue for pending changes
 CREATE TABLE IF NOT EXISTS sync_queue (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,6 +326,24 @@ CREATE TABLE IF NOT EXISTS links (
   UNIQUE(source_type, source_id, target_type, target_id, link_type)
 );
 
+-- Attachments
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  filename TEXT NOT NULL,
+  filepath TEXT NOT NULL,
+  mime_type TEXT,
+  size_bytes BIGINT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status) WHERE NOT sync_deleted;
 CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date) WHERE NOT sync_deleted;
@@ -320,7 +356,7 @@ CREATE INDEX IF NOT EXISTS idx_email_refs_message_id ON email_refs(message_id);
 (** Run schema migration on a connection *)
 let migrate_sqlite pool =
   let exec_sql sql =
-    Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    Caqti_lwt_unix.Pool.use (fun (module C : Caqti_lwt.CONNECTION) ->
       (* Split by semicolons and execute each statement *)
       let statements = String.split_on_char ';' sql in
       let rec exec_all = function
@@ -336,13 +372,13 @@ let migrate_sqlite pool =
             | Error e -> Lwt.return (Error e)
       in
       exec_all statements
-    )
+    ) pool
   in
   exec_sql sqlite_schema
 
 let migrate_postgres pool =
   let exec_sql sql =
-    Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    Caqti_lwt_unix.Pool.use (fun (module C : Caqti_lwt.CONNECTION) ->
       let statements = String.split_on_char ';' sql in
       let rec exec_all = function
         | [] -> Lwt.return (Ok ())
@@ -357,6 +393,6 @@ let migrate_postgres pool =
             | Error e -> Lwt.return (Error e)
       in
       exec_all statements
-    )
+    ) pool
   in
   exec_sql postgres_schema

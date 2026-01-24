@@ -155,11 +155,94 @@ let init_cmd =
   let info = Cmd.info "init" ~doc in
   Cmd.v info Term.(const run $ config_file)
 
+(** Install command - install binary and wrapper to /usr/local/bin *)
+let install_cmd =
+  let prefix =
+    let doc = "Installation prefix (default: /usr/local)." in
+    Arg.(value & opt string "/usr/local" & info ["prefix"] ~docv:"PREFIX" ~doc)
+  in
+  let password =
+    let doc = "PostgreSQL password to embed in wrapper script." in
+    Arg.(value & opt string "b3l0wz3r0" & info ["password"] ~docv:"PASSWORD" ~doc)
+  in
+  let run prefix password =
+    let exe_path = Sys.executable_name in
+    let dest_dir = Filename.concat prefix "bin" in
+    let binary_path = Filename.concat dest_dir "parenvault-bin" in
+    let wrapper_path = Filename.concat dest_dir "pv" in
+    (* Generate wrapper script content *)
+    let wrapper_content = Printf.sprintf {|#!/bin/bash
+# ParenVault wrapper - sets environment and runs the binary
+export PARENVAULT_DB_PASSWORD="%s"
+exec "%s" tui "$@"
+|} password binary_path in
+    (* Check if we need sudo *)
+    let need_sudo = 
+      try
+        let test_file = Filename.concat dest_dir ".pv_test" in
+        let oc = open_out test_file in
+        close_out oc;
+        Sys.remove test_file;
+        false
+      with _ -> true
+    in
+    if need_sudo then begin
+      Printf.printf "Installing to %s (requires sudo)...\n" dest_dir;
+      (* Create temp files for the wrapper *)
+      let tmp_wrapper = Filename.temp_file "pv_wrapper" ".sh" in
+      let oc = open_out tmp_wrapper in
+      output_string oc wrapper_content;
+      close_out oc;
+      (* Install binary and wrapper with sudo *)
+      let cmd = Printf.sprintf 
+        "sudo cp '%s' '%s' && sudo chmod +x '%s' && sudo cp '%s' '%s' && sudo chmod +x '%s'" 
+        exe_path binary_path binary_path
+        tmp_wrapper wrapper_path wrapper_path in
+      let ret = Sys.command cmd in
+      Sys.remove tmp_wrapper;
+      if ret = 0 then begin
+        Printf.printf "Installed successfully!\n";
+        Printf.printf "  Binary: %s\n" binary_path;
+        Printf.printf "  Wrapper: %s\n\n" wrapper_path;
+        Printf.printf "You can now run: pv\n"
+      end else
+        Printf.eprintf "Installation failed (exit code %d)\n" ret
+    end else begin
+      Printf.printf "Installing to %s...\n" dest_dir;
+      (* Copy binary *)
+      let ic = open_in_bin exe_path in
+      let oc = open_out_bin binary_path in
+      (try
+        let buf = Bytes.create 4096 in
+        let rec copy () =
+          let n = input ic buf 0 4096 in
+          if n > 0 then (output oc buf 0 n; copy ())
+        in
+        copy ()
+      with e -> close_in ic; close_out oc; raise e);
+      close_in ic;
+      close_out oc;
+      Unix.chmod binary_path 0o755;
+      (* Write wrapper script *)
+      let oc = open_out wrapper_path in
+      output_string oc wrapper_content;
+      close_out oc;
+      Unix.chmod wrapper_path 0o755;
+      Printf.printf "Installed successfully!\n";
+      Printf.printf "  Binary: %s\n" binary_path;
+      Printf.printf "  Wrapper: %s\n\n" wrapper_path;
+      Printf.printf "You can now run: pv\n"
+    end
+  in
+  let doc = "Install ParenVault binary and wrapper to system path" in
+  let info = Cmd.info "install" ~doc in
+  Cmd.v info Term.(const run $ prefix $ password)
+
 (** Main command group *)
 let main_cmd =
   let doc = "Personal Knowledge Management TUI with offline-first sync" in
   let info = Cmd.info "parenvault" ~version:"0.1.0" ~doc in
   let default = Term.(ret (const (`Help (`Pager, None)))) in
-  Cmd.group info ~default [tui_cmd; sync_cmd; add_cmd; list_cmd; init_cmd]
+  Cmd.group info ~default [tui_cmd; sync_cmd; add_cmd; list_cmd; init_cmd; install_cmd]
 
 let () = exit (Cmd.eval main_cmd)

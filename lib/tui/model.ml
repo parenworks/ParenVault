@@ -23,6 +23,7 @@ type view =
   | Inbox
   | Archive
   | Search of string
+  | LinkPicker of string * uuid  (** source_type, source_id - picking target to link *)
 
 (** Input mode *)
 type input_mode =
@@ -69,6 +70,14 @@ type model = {
   archived_notes: note list;
   archived_events: event list;
   
+  (* Attachments for current detail view *)
+  current_attachments: Domain.Types.attachment list;
+  attachment_index: int;
+  
+  (* Links for current detail view *)
+  current_links: Domain.Types.link list;
+  link_index: int;
+  
   (* UI state *)
   selected_index: int;
   scroll_offset: int;
@@ -112,6 +121,10 @@ let init ~device_id =
     archived_tasks = [];
     archived_notes = [];
     archived_events = [];
+    current_attachments = [];
+    attachment_index = 0;
+    current_links = [];
+    link_index = 0;
     selected_index = 0;
     scroll_offset = 0;
     input_mode = Normal;
@@ -150,6 +163,9 @@ type msg =
   | QuickCapture
   | DailyNote
   | AddSubtask
+  | AddAttachment of string  (* filepath *)
+  | DeleteAttachment
+  | OpenAttachment
   | EditSelected
   | DeleteSelected
   | RestoreSelected  (* Restore from archive *)

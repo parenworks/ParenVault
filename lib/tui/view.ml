@@ -111,6 +111,7 @@ let render_header model =
     | Inbox -> "Inbox"
     | Archive -> "Archive"
     | Search q -> "Search: " ^ q
+    | LinkPicker _ -> "Link To..."
   in
   let sync_status = 
     if model.sync_online then

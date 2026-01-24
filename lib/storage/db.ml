@@ -55,6 +55,8 @@ let init ~local_path ?remote_uri () =
   match create_local_pool ~path:local_path with
   | Error err -> Lwt.return (Error (Caqti_error.show err))
   | Ok local ->
+    (* Run schema migration on local SQLite to ensure all tables exist *)
+    let* _migrate_result = Schema.migrate_sqlite local in
     let* remote, remote_available = 
       match remote_uri with
       | None -> Lwt.return (None, false)
@@ -63,7 +65,12 @@ let init ~local_path ?remote_uri () =
         | Error _ -> Lwt.return (None, false)
         | Ok pool ->
           let* available = check_remote_connection pool in
-          Lwt.return (Some pool, available)
+          if available then
+            (* Run schema migration on remote PostgreSQL too *)
+            let* _migrate_result = Schema.migrate_postgres pool in
+            Lwt.return (Some pool, available)
+          else
+            Lwt.return (Some pool, available)
     in
     Lwt.return (Ok { local; remote; remote_available })
 

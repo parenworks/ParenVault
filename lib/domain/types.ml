@@ -164,3 +164,17 @@ type link = {
   created_at: timestamp;
   sync: sync_meta;
 }
+
+(** File attachment *)
+type attachment = {
+  id: uuid;
+  filename: string;             (** Original filename *)
+  filepath: string;             (** Path relative to attachments dir *)
+  mime_type: string option;     (** MIME type if known *)
+  size_bytes: int64;            (** File size in bytes *)
+  entity_type: string;          (** "task", "note", "event" *)
+  entity_id: uuid;              (** ID of linked entity *)
+  created_at: timestamp;
+  sync: sync_meta;
+}
+
