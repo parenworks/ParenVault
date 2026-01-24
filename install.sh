@@ -41,7 +41,9 @@ opam install -y \
     uuidm \
     yojson \
     toml \
-    ppx_deriving
+    ppx_deriving \
+    omd \
+    mrmime
 
 echo ""
 echo "=== Building ParenVault ==="
