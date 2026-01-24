@@ -21,6 +21,7 @@ type view =
   | ProjectDetail of uuid
   | ProjectEdit of uuid option  (** None = new project *)
   | Inbox
+  | Archive
   | Search of string
 
 (** Input mode *)
@@ -63,6 +64,11 @@ type model = {
   projects: project list;
   contacts: contact list;
   
+  (* Archived/deleted items *)
+  archived_tasks: task list;
+  archived_notes: note list;
+  archived_events: event list;
+  
   (* UI state *)
   selected_index: int;
   scroll_offset: int;
@@ -103,6 +109,9 @@ let init ~device_id =
     events = [];
     projects = [];
     contacts = [];
+    archived_tasks = [];
+    archived_notes = [];
+    archived_events = [];
     selected_index = 0;
     scroll_offset = 0;
     input_mode = Normal;
@@ -143,6 +152,7 @@ type msg =
   | AddSubtask
   | EditSelected
   | DeleteSelected
+  | RestoreSelected  (* Restore from archive *)
   | ToggleTaskStatus
   | ToggleSubtaskStatus of uuid  (* Toggle subtask by ID *)
   | SetTaskPriority of priority
@@ -196,6 +206,8 @@ let current_items model =
   | ContactList -> List.length model.contacts
   | Inbox -> 
     List.filter (fun (t : Domain.Types.task) -> t.status = Domain.Types.Inbox) model.tasks |> List.length
+  | Archive ->
+    List.length model.archived_tasks + List.length model.archived_notes + List.length model.archived_events
   | Search _ -> List.length model.search_results
   | _ -> 0
 

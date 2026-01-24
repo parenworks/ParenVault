@@ -30,6 +30,7 @@ let render_header model width =
     | ProjectEdit None -> "New Project"
     | ProjectEdit (Some _) -> "Edit Project"
     | Inbox -> "Inbox"
+    | Archive -> "Archive"
     | Search q -> "Search: " ^ q
   in
   let sync_indicator = 
@@ -287,7 +288,7 @@ let render_footer model term_width =
     | Command -> "COMMAND"
   in
   let mode = I.string A.(st bold) (Printf.sprintf "[%s]" mode_str) in
-  let nav_hint = "1:Dash 2:Tasks 3:Notes 4:Cal 5:Proj 6:Contacts 0:Inbox" in
+  let nav_hint = "1:Dash 2:Tasks 3:Notes 4:Cal 5:Proj 6:Contacts 0:Inbox 9:Archive" in
   let help = match model.view with
     | TaskList | Inbox -> "j/k:nav Enter:open n:new c:capture x:done d:del D:daily | " ^ nav_hint
     | Dashboard -> "j/k:nav Enter:open n:new c:capture D:daily | " ^ nav_hint
@@ -295,6 +296,7 @@ let render_footer model term_width =
     | Calendar -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | ContactList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | Projects -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
+    | Archive -> "j/k:nav r:restore d:delete Esc:back | " ^ nav_hint
     | TaskDetail _ -> "e:edit a:subtask d:del D:daily Esc:back | " ^ nav_hint
     | NoteDetail _ -> "e:edit d:del D:daily Esc:back | " ^ nav_hint
     | EventDetail _ -> "e:edit d:del Esc:back | " ^ nav_hint
@@ -558,6 +560,28 @@ let render model (width, height) =
          let title = if id_opt = None then "New Note" else "Edit Note" in
          render_form ~title form
        | None -> I.string A.(fg red) "  Form not initialized")
+    | Archive ->
+      (* Render archived/deleted items *)
+      let all_archived = 
+        List.map (fun t -> `Task t) model.archived_tasks @
+        List.map (fun n -> `Note n) model.archived_notes @
+        List.map (fun e -> `Event e) model.archived_events
+      in
+      if all_archived = [] then
+        I.(void 0 1 <-> string A.(fg (gray 12)) "  No archived items")
+      else
+        let lines = List.mapi (fun i item ->
+          let selected = i = model.selected_index in
+          let attr = if selected then A.(fg white ++ bg blue) else A.empty in
+          let prefix = if selected then " > " else "   " in
+          let (icon, title) = match item with
+            | `Task (t : Domain.Types.task) -> ("📋 ", t.title)
+            | `Note (n : Domain.Types.note) -> ("📝 ", n.title)
+            | `Event (e : Domain.Types.event) -> ("📅 ", e.title)
+          in
+          I.string attr (prefix ^ icon ^ title)
+        ) all_archived in
+        I.(void 0 1 <-> string A.(fg (gray 12)) "  Press 'r' to restore selected item" <-> void 0 1 <-> vcat lines)
     | Search _ ->
       let search_line = I.(
         void 0 1 <->
@@ -670,6 +694,10 @@ let handle_key model key =
     `Continue (update model (Navigate ContactList))
   | `ASCII '0' when model.input_mode = Normal -> 
     `Continue (update model (Navigate Inbox))
+  | `ASCII '9' when model.input_mode = Normal -> 
+    `Continue (update model (Navigate Archive))
+  | `ASCII 'r' when model.input_mode = Normal -> 
+    `Continue (update model RestoreSelected)
   | `Page `Down -> 
     `Continue (update model PageDown)
   | `Page `Up -> 
@@ -809,6 +837,19 @@ let run ~config () =
   in
   let* projects = match db_pool with
     | Some p -> Storage.Queries.list_projects p
+    | None -> Lwt.return []
+  in
+  (* Load archived/deleted items *)
+  let* archived_tasks = match db_pool with
+    | Some p -> Storage.Queries.list_deleted_tasks p
+    | None -> Lwt.return []
+  in
+  let* archived_notes = match db_pool with
+    | Some p -> Storage.Queries.list_deleted_notes p
+    | None -> Lwt.return []
+  in
+  let* archived_events = match db_pool with
+    | Some p -> Storage.Queries.list_deleted_events p
     | None -> Lwt.return []
   in
   let term = Term.create () in
@@ -1161,6 +1202,30 @@ let run ~config () =
          let status = Some { text = "Contact deleted"; level = `Success; expires_at = None } in
          Lwt.return { model with contacts; status; selected_index = max 0 (model.selected_index - 1) }
        | None -> Lwt.return model)
+    | Archive, Some p ->
+      (* Permanent delete from archive *)
+      let all_archived = 
+        List.map (fun t -> `Task t) model.archived_tasks @
+        List.map (fun n -> `Note n) model.archived_notes @
+        List.map (fun e -> `Event e) model.archived_events
+      in
+      (match List.nth_opt all_archived model.selected_index with
+       | Some (`Task task) ->
+         let* _result = Storage.Queries.permanent_delete_task p ~id:task.Domain.Types.id in
+         let* archived_tasks = Storage.Queries.list_deleted_tasks p in
+         let status = Some { text = "Task permanently deleted"; level = `Success; expires_at = None } in
+         Lwt.return { model with archived_tasks; status; selected_index = max 0 (model.selected_index - 1) }
+       | Some (`Note note) ->
+         let* _result = Storage.Queries.permanent_delete_note p ~id:note.Domain.Types.id in
+         let* archived_notes = Storage.Queries.list_deleted_notes p in
+         let status = Some { text = "Note permanently deleted"; level = `Success; expires_at = None } in
+         Lwt.return { model with archived_notes; status; selected_index = max 0 (model.selected_index - 1) }
+       | Some (`Event event) ->
+         let* _result = Storage.Queries.permanent_delete_event p ~id:event.Domain.Types.id in
+         let* archived_events = Storage.Queries.list_deleted_events p in
+         let status = Some { text = "Event permanently deleted"; level = `Success; expires_at = None } in
+         Lwt.return { model with archived_events; status; selected_index = max 0 (model.selected_index - 1) }
+       | None -> Lwt.return model)
     | _ ->
       let status = Some { text = "Cannot delete from this view"; level = `Warning; expires_at = None } in
       Lwt.return { model with status }
@@ -1225,6 +1290,38 @@ let run ~config () =
                 | None -> loop model)
              | None -> loop model)
           | _ -> loop model)
+       | `ASCII 'r', Normal ->
+         (* Restore from archive *)
+         (match model.view, db_pool with
+          | Archive, Some p ->
+            let all_archived = 
+              List.map (fun t -> `Task t) model.archived_tasks @
+              List.map (fun n -> `Note n) model.archived_notes @
+              List.map (fun e -> `Event e) model.archived_events
+            in
+            (match List.nth_opt all_archived model.selected_index with
+             | Some (`Task task) ->
+               let* _result = Storage.Queries.restore_task p ~id:task.Domain.Types.id in
+               let* tasks = Storage.Queries.list_tasks p in
+               let* archived_tasks = Storage.Queries.list_deleted_tasks p in
+               let status = Some { text = "Task restored"; level = `Success; expires_at = None } in
+               loop { model with tasks; archived_tasks; status; selected_index = max 0 (model.selected_index - 1) }
+             | Some (`Note note) ->
+               let* _result = Storage.Queries.restore_note p ~id:note.Domain.Types.id in
+               let* notes = Storage.Queries.list_notes p in
+               let* archived_notes = Storage.Queries.list_deleted_notes p in
+               let status = Some { text = "Note restored"; level = `Success; expires_at = None } in
+               loop { model with notes; archived_notes; status; selected_index = max 0 (model.selected_index - 1) }
+             | Some (`Event event) ->
+               let* _result = Storage.Queries.restore_event p ~id:event.Domain.Types.id in
+               let* events = Storage.Queries.list_events p in
+               let* archived_events = Storage.Queries.list_deleted_events p in
+               let status = Some { text = "Event restored"; level = `Success; expires_at = None } in
+               loop { model with events; archived_events; status; selected_index = max 0 (model.selected_index - 1) }
+             | None -> loop model)
+          | _ -> 
+            let status = Some { text = "Restore only works in Archive view (press 9)"; level = `Warning; expires_at = None } in
+            loop { model with status })
        | _ ->
          (match handle_key model key with
           | `Quit -> 
@@ -1239,5 +1336,5 @@ let run ~config () =
       let* () = Term.release term in
       Lwt.return ()
   in
-  let initial_model = { (Model.init ~device_id) with sync_online; width = init_w; height = init_h; tasks; notes; events; projects; contacts } in
+  let initial_model = { (Model.init ~device_id) with sync_online; width = init_w; height = init_h; tasks; notes; events; projects; contacts; archived_tasks; archived_notes; archived_events } in
   loop initial_model

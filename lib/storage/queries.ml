@@ -52,6 +52,40 @@ let list_tasks pool =
   | Ok rows -> Lwt.return (List.map task_of_row rows)
   | Error _ -> Lwt.return []
 
+let list_deleted_tasks_query = Q.(T.unit ->* task_row_type)
+  "SELECT id, title, description, status, priority, tags, due_date, scheduled_date, completed_at, recurrence, project_id, parent_id, created_at FROM tasks WHERE sync_deleted ORDER BY created_at DESC"
+
+let list_deleted_tasks pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_deleted_tasks_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map task_of_row rows)
+  | Error _ -> Lwt.return []
+
+let restore_task_query = Q.(T.(t2 ptime string) ->. T.unit)
+  "UPDATE tasks SET sync_deleted = false, sync_modified_at = ? WHERE id = ?"
+
+let restore_task pool ~id =
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec restore_task_query (now, id)
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let permanent_delete_task_query = Q.(T.string ->. T.unit)
+  "DELETE FROM tasks WHERE id = ?"
+
+let permanent_delete_task pool ~id =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec permanent_delete_task_query id
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
 let insert_task_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 string (t2 (option ptime) (t2 (option ptime) (t2 (option string) (t2 (option string) (t2 (option string) (t2 ptime (t2 string ptime))))))))))))) ->. T.unit)
   "INSERT INTO tasks (id, title, description, status, priority, tags, due_date, scheduled_date, recurrence, project_id, parent_id, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
 
@@ -139,6 +173,40 @@ let list_notes pool =
   | Ok rows -> Lwt.return (List.map note_of_row rows)
   | Error _ -> Lwt.return []
 
+let list_deleted_notes_query = Q.(T.unit ->* note_row_type)
+  "SELECT id, title, content, tags, project_id, created_at FROM notes WHERE sync_deleted ORDER BY created_at DESC"
+
+let list_deleted_notes pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_deleted_notes_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map note_of_row rows)
+  | Error _ -> Lwt.return []
+
+let restore_note_query = Q.(T.(t2 ptime string) ->. T.unit)
+  "UPDATE notes SET sync_deleted = false, sync_modified_at = ? WHERE id = ?"
+
+let restore_note pool ~id =
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec restore_note_query (now, id)
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let permanent_delete_note_query = Q.(T.string ->. T.unit)
+  "DELETE FROM notes WHERE id = ?"
+
+let permanent_delete_note pool ~id =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec permanent_delete_note_query id
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
 let insert_note_query = Q.(T.(t2 string (t2 string (t2 string (t2 string (t2 (option string) (t2 ptime (t2 string ptime))))))) ->. T.unit)
   "INSERT INTO notes (id, title, content, tags, project_id, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)"
 
@@ -210,6 +278,40 @@ let list_events pool =
   match result with
   | Ok rows -> Lwt.return (List.map event_of_row rows)
   | Error _ -> Lwt.return []
+
+let list_deleted_events_query = Q.(T.unit ->* event_row_type)
+  "SELECT id, title, description, start_time, end_time, location, tags, recurrence, created_at FROM events WHERE sync_deleted ORDER BY start_time ASC"
+
+let list_deleted_events pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_deleted_events_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map event_of_row rows)
+  | Error _ -> Lwt.return []
+
+let restore_event_query = Q.(T.(t2 ptime string) ->. T.unit)
+  "UPDATE events SET sync_deleted = false, sync_modified_at = ? WHERE id = ?"
+
+let restore_event pool ~id =
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec restore_event_query (now, id)
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let permanent_delete_event_query = Q.(T.string ->. T.unit)
+  "DELETE FROM events WHERE id = ?"
+
+let permanent_delete_event pool ~id =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec permanent_delete_event_query id
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
 
 let insert_event_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 ptime (t2 (option ptime) (t2 (option string) (t2 string (t2 (option string) (t2 ptime (t2 string ptime)))))))))) ->. T.unit)
   "INSERT INTO events (id, title, description, start_time, end_time, location, tags, recurrence, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"

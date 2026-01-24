@@ -363,6 +363,14 @@ let update model msg =
       expires_at = None;
     } in
     { model with status = Some status }
+
+  | RestoreSelected ->
+    (* Restore is handled in the main loop with DB access *)
+    (* This just provides feedback if not in Archive view *)
+    (match model.view with
+     | Archive -> model  (* Actual restore happens in main loop *)
+     | _ -> 
+       { model with status = Some { text = "Restore only works in Archive view (press 9)"; level = `Warning; expires_at = None } })
   
   | ToggleTaskStatus ->
     (* Toggle between Done and Todo for the selected task *)

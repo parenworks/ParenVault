@@ -109,6 +109,7 @@ let render_header model =
     | ProjectEdit None -> "New Project"
     | ProjectEdit (Some _) -> "Edit Project"
     | Inbox -> "Inbox"
+    | Archive -> "Archive"
     | Search q -> "Search: " ^ q
   in
   let sync_status = 
