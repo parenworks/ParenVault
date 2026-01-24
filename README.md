@@ -16,10 +16,10 @@ A personal knowledge management (PKM) TUI application written in OCaml with offl
 ┌─────────────────────────────────────────────────────────────┐
 │                         TUI (minttea)                       │
 ├─────────────────────────────────────────────────────────────┤
-│  Domain Layer (types, entities, business logic)            │
+│  Domain Layer (types, entities, business logic)             │
 ├──────────────────────┬──────────────────────────────────────┤
-│  Local Storage       │  Sync Engine                        │
-│  (SQLite/caqti)      │  (conflict resolution)              │
+│  Local Storage       │  Sync Engine                         │
+│  (SQLite/caqti)      │  (conflict resolution)               │
 ├──────────────────────┴──────────────────────────────────────┤
 │  Remote Storage (PostgreSQL via Tailscale)                  │
 └─────────────────────────────────────────────────────────────┘
