@@ -194,6 +194,8 @@ let update model msg =
            { name = "Priority"; value = "P2"; field_type = `Select ["P0"; "P1"; "P2"; "P3"] };
            { name = "Due Date"; value = ""; field_type = `Date };
            { name = "Scheduled"; value = ""; field_type = `Date };
+           { name = "Block Start"; value = ""; field_type = `DateTime };
+           { name = "Block End"; value = ""; field_type = `DateTime };
            { name = "Recurrence"; value = "None"; field_type = `MultiSelect ["Mon"; "Tue"; "Wed"; "Thu"; "Fri"; "Sat"; "Sun"] };
            { name = "Tags"; value = ""; field_type = `Text };
          ];
@@ -291,6 +293,15 @@ let update model msg =
           in
           let due_date_val = format_date_opt task.due_date in
           let scheduled_val = format_date_opt task.scheduled_date in
+          let format_datetime_opt ts_opt = match ts_opt with
+            | Some ts -> 
+              let (y, m, d) = Ptime.to_date ts.Domain.Types.time in
+              let ((hh, mm, _), _) = Ptime.to_date_time ts.Domain.Types.time in
+              Printf.sprintf "%04d-%02d-%02d %02d:%02d" y m d hh mm
+            | None -> ""
+          in
+          let block_start_val = format_datetime_opt task.block_start in
+          let block_end_val = format_datetime_opt task.block_end in
           let form = {
             fields = [
               { name = "Title"; value = task.title; field_type = `Text };
@@ -298,6 +309,8 @@ let update model msg =
               { name = "Priority"; value = Domain.Types.priority_to_string task.priority; field_type = `Select ["P0"; "P1"; "P2"; "P3"] };
               { name = "Due Date"; value = due_date_val; field_type = `Date };
               { name = "Scheduled"; value = scheduled_val; field_type = `Date };
+              { name = "Block Start"; value = block_start_val; field_type = `DateTime };
+              { name = "Block End"; value = block_end_val; field_type = `DateTime };
               { name = "Recurrence"; value = recurrence_val; field_type = `MultiSelect ["Mon"; "Tue"; "Wed"; "Thu"; "Fri"; "Sat"; "Sun"] };
               { name = "Tags"; value = String.concat ", " task.tags; field_type = `Text };
             ];

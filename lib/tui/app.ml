@@ -392,6 +392,15 @@ let render_form ~title (form : Model.form_state) term_width =
          string value_attr (" " ^ value_display ^ " ") <|>
          string border_attr "]" <|>
          string A.(fg (gray 10)) hint)
+    | `DateTime ->
+      let hint = if focused then " (YYYY-MM-DD HH:MM)" else "" in
+      let value_display = if field.value = "" then "____-__-__ __:__" else field.value in
+      I.(string A.empty ("  " ^ indicator ^ " ") <|> 
+         string label_attr (field.name ^ ": ") <|>
+         string border_attr "[" <|>
+         string value_attr (" " ^ value_display ^ " ") <|>
+         string border_attr "]" <|>
+         string A.(fg (gray 10)) hint)
     | `Text ->
       let max_len = 50 in
       let value_display = 
@@ -443,6 +452,23 @@ let render model (width, height) =
          in
          let due_str = format_date_opt task.due_date in
          let sched_str = format_date_opt task.scheduled_date in
+         (* Format time block *)
+         let format_datetime_opt ts_opt = match ts_opt with
+           | Some ts -> 
+             let (y, m, d) = Ptime.to_date ts.Domain.Types.time in
+             let ((hh, mm, _), _) = Ptime.to_date_time ts.Domain.Types.time in
+             Printf.sprintf "%02d-%s-%04d %02d:%02d" d months.(m - 1) y hh mm
+           | None -> ""
+         in
+         let block_start_str = format_datetime_opt task.block_start in
+         let block_end_str = format_datetime_opt task.block_end in
+         let time_block_str = 
+           if block_start_str <> "" && block_end_str <> "" then
+             Printf.sprintf "⏰ %s → %s" block_start_str block_end_str
+           else if block_start_str <> "" then
+             Printf.sprintf "⏰ %s →" block_start_str
+           else ""
+         in
          (* Find subtasks *)
          let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some id) model.tasks in
          let (subtasks_section, progress_str) = 
@@ -511,6 +537,7 @@ let render model (width, height) =
            string A.empty ("  Priority: " ^ Domain.Types.priority_to_string task.Domain.Types.priority) <->
            (if due_str = "" then empty else string A.empty ("  Due: " ^ due_str)) <->
            (if sched_str = "" then empty else string A.(fg blue) ("  📅 Scheduled: " ^ sched_str)) <->
+           (if time_block_str = "" then empty else string A.(fg green) ("  " ^ time_block_str)) <->
            (if recurrence_str = "" then empty else string A.(fg magenta) ("  " ^ recurrence_str)) <->
            (if tags_str = "" then empty else string A.(fg cyan) ("  " ^ tags_str)) <->
            void 0 1 <->
@@ -1223,9 +1250,26 @@ let run ~config () =
         in
         let due_date = Option.bind (get_field_value form "Due Date") parse_date |> make_timestamp in
         let scheduled_date = Option.bind (get_field_value form "Scheduled") parse_date |> make_timestamp in
+        (* Parse datetime fields for time blocking *)
+        let parse_datetime s =
+          try
+            Scanf.sscanf s "%d-%d-%d %d:%d" (fun y mo d hh mm ->
+              Some (y, mo, d, hh, mm))
+          with _ -> None
+        in
+        let make_datetime_timestamp dt_opt =
+          match dt_opt with
+          | Some (y, mo, d, hh, mm) ->
+            (match Ptime.of_date_time ((y, mo, d), ((hh, mm, 0), 0)) with
+             | Some t -> Some { Domain.Types.time = t; timezone = None }
+             | None -> None)
+          | None -> None
+        in
+        let block_start = Option.bind (get_field_value form "Block Start") parse_datetime |> make_datetime_timestamp in
+        let block_end = Option.bind (get_field_value form "Block End") parse_datetime |> make_datetime_timestamp in
         (* Check if this is a subtask (entity_id holds parent_id) *)
         let parent_id = form.entity_id in
-        let* result = Storage.Queries.create_task p ~title ?description ~tags ?recurrence ?due_date ?scheduled_date ?parent_id () in
+        let* result = Storage.Queries.create_task p ~title ?description ~tags ?recurrence ?due_date ?scheduled_date ?block_start ?block_end ?parent_id () in
         let* tasks = Storage.Queries.list_tasks p in
         let (status, return_view) = match result, parent_id with
           | Some _, Some pid -> (Some { text = "Subtask created"; level = `Success; expires_at = None }, TaskDetail pid)
@@ -1375,7 +1419,24 @@ let run ~config () =
         in
         let due_date = Option.bind (get_field_value form "Due Date") parse_date |> make_timestamp in
         let scheduled_date = Option.bind (get_field_value form "Scheduled") parse_date |> make_timestamp in
-        let* _result = Storage.Queries.update_task p ~id ~title ?description ~tags ?recurrence ?due_date ?scheduled_date () in
+        (* Parse datetime fields for time blocking *)
+        let parse_datetime s =
+          try
+            Scanf.sscanf s "%d-%d-%d %d:%d" (fun y mo d hh mm ->
+              Some (y, mo, d, hh, mm))
+          with _ -> None
+        in
+        let make_datetime_timestamp dt_opt =
+          match dt_opt with
+          | Some (y, mo, d, hh, mm) ->
+            (match Ptime.of_date_time ((y, mo, d), ((hh, mm, 0), 0)) with
+             | Some t -> Some { Domain.Types.time = t; timezone = None }
+             | None -> None)
+          | None -> None
+        in
+        let block_start = Option.bind (get_field_value form "Block Start") parse_datetime |> make_datetime_timestamp in
+        let block_end = Option.bind (get_field_value form "Block End") parse_datetime |> make_datetime_timestamp in
+        let* _result = Storage.Queries.update_task p ~id ~title ?description ~tags ?recurrence ?due_date ?scheduled_date ?block_start ?block_end () in
         let* tasks = Storage.Queries.list_tasks p in
         let status = Some { text = "Task updated"; level = `Success; expires_at = None } in
         Lwt.return { model with tasks; view = TaskDetail id; previous_views = []; input_mode = Normal; form = None; status }
@@ -1464,10 +1525,29 @@ let run ~config () =
   let delete_and_update model =
     match model.view, db_pool with
     | TaskDetail id, Some p ->
-      let* _result = Storage.Queries.delete_task p ~id in
-      let* tasks = Storage.Queries.list_tasks p in
-      let status = Some { text = "Task deleted"; level = `Success; expires_at = None } in
-      Lwt.return { model with tasks; view = TaskList; previous_views = []; status }
+      (* Check if a link is selected - delete link, otherwise delete task *)
+      if model.current_links <> [] && model.link_index >= 0 && model.link_index < List.length model.current_links then
+        (match List.nth_opt model.current_links model.link_index with
+         | Some link ->
+           let* _result = Storage.Queries.delete_link p ~id:link.Domain.Types.id in
+           let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:id in
+           let status = Some { text = "Link deleted"; level = `Success; expires_at = None } in
+           Lwt.return { model with current_links = links; link_index = max 0 (model.link_index - 1); status }
+         | None -> Lwt.return model)
+      else if model.current_attachments <> [] && model.attachment_index >= 0 && model.attachment_index < List.length model.current_attachments then
+        (match List.nth_opt model.current_attachments model.attachment_index with
+         | Some att ->
+           let* _result = Storage.Queries.delete_attachment p ~id:att.Domain.Types.id in
+           let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:id in
+           let status = Some { text = "Attachment deleted"; level = `Success; expires_at = None } in
+           Lwt.return { model with current_attachments = attachments; attachment_index = max 0 (model.attachment_index - 1); status }
+         | None -> Lwt.return model)
+      else
+        (* No link or attachment selected - delete the task itself *)
+        let* _result = Storage.Queries.delete_task p ~id in
+        let* tasks = Storage.Queries.list_tasks p in
+        let status = Some { text = "Task deleted"; level = `Success; expires_at = None } in
+        Lwt.return { model with tasks; view = TaskList; previous_views = []; status }
     | NoteDetail id, Some p ->
       let* _result = Storage.Queries.delete_note p ~id in
       let* notes = Storage.Queries.list_notes p in
@@ -1767,6 +1847,37 @@ let run ~config () =
                let* links = Storage.Queries.list_links_for_entity p ~entity_type:"project" ~entity_id:id in
                loop { new_model with current_links = links; link_index = 0 }
              | _ -> loop new_model)
+          | TaskDetail id, Some p ->
+            (* Open linked item from task detail *)
+            if model.current_links <> [] && model.link_index >= 0 && model.link_index < List.length model.current_links then
+              (match List.nth_opt model.current_links model.link_index with
+               | Some link ->
+                 let (other_type, other_id) = 
+                   if link.Domain.Types.target_id = id then (link.source_type, link.source_id)
+                   else (link.target_type, link.target_id)
+                 in
+                 (match other_type with
+                  | "task" ->
+                    let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:other_id in
+                    let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:other_id in
+                    let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some other_id) model.tasks in
+                    let att_idx = if subtasks <> [] then -1 else 0 in
+                    loop { model with view = TaskDetail other_id; previous_views = model.view :: model.previous_views; current_attachments = attachments; attachment_index = att_idx; current_links = links; link_index = 0 }
+                  | "note" ->
+                    let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"note" ~entity_id:other_id in
+                    let* links = Storage.Queries.list_links_for_entity p ~entity_type:"note" ~entity_id:other_id in
+                    loop { model with view = NoteDetail other_id; previous_views = model.view :: model.previous_views; current_attachments = attachments; attachment_index = 0; current_links = links; link_index = 0 }
+                  | "project" ->
+                    let* links = Storage.Queries.list_links_for_entity p ~entity_type:"project" ~entity_id:other_id in
+                    loop { model with view = ProjectDetail other_id; previous_views = model.view :: model.previous_views; current_links = links; link_index = 0 }
+                  | "event" ->
+                    loop { model with view = EventDetail other_id; previous_views = model.view :: model.previous_views }
+                  | "contact" ->
+                    loop { model with view = ContactDetail other_id; previous_views = model.view :: model.previous_views }
+                  | _ -> loop model)
+               | None -> loop model)
+            else
+              loop model
           | ProjectDetail id, Some p ->
             (* Open linked item from project detail *)
             (match List.nth_opt model.current_links model.link_index with

@@ -48,6 +48,8 @@ let task_of_row ((id, title, description, status),
     recurrence = None;
     parent_id;
     project_id;
+    block_start = None;
+    block_end = None;
     created_at = parse_timestamp created_at;
     sync = {
       local_id = sync_local_id;

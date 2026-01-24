@@ -17,7 +17,7 @@ let now () = Ptime_clock.now ()
    TASK QUERIES
    ============================================ *)
 
-let task_of_row (id, (title, (description, (status_str, (priority_str, (tags_json, (due_date, (scheduled_date, (completed_at, (recurrence, (project_id, (parent_id, created_at)))))))))))) =
+let task_of_row (id, (title, (description, (status_str, (priority_str, (tags_json, (due_date, (scheduled_date, (completed_at, (recurrence, (project_id, (parent_id, (block_start, (block_end, created_at)))))))))))))) =
   let status = task_status_of_string status_str |> Option.value ~default:Inbox in
   let priority = priority_of_string priority_str |> Option.value ~default:P2 in
   let tags = try Yojson.Safe.from_string tags_json |> Yojson.Safe.Util.to_list |> List.map Yojson.Safe.Util.to_string with _ -> [] in
@@ -35,14 +35,16 @@ let task_of_row (id, (title, (description, (status_str, (priority_str, (tags_jso
     recurrence;
     project_id;
     parent_id;
+    block_start = to_timestamp block_start;
+    block_end = to_timestamp block_end;
     created_at = { time = created_at; timezone = None };
     sync = { local_id = id; version = 1; modified_at = { time = created_at; timezone = None }; synced_at = None; deleted = false };
   }
 
-let task_row_type = T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 string (t2 (option ptime) (t2 (option ptime) (t2 (option ptime) (t2 (option string) (t2 (option string) (t2 (option string) ptime))))))))))))
+let task_row_type = T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 string (t2 (option ptime) (t2 (option ptime) (t2 (option ptime) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option ptime) (t2 (option ptime) ptime))))))))))))))
 
 let list_tasks_query = Q.(T.unit ->* task_row_type)
-  "SELECT id, title, description, status, priority, tags, due_date, scheduled_date, completed_at, recurrence, project_id, parent_id, created_at FROM tasks WHERE NOT sync_deleted ORDER BY created_at DESC"
+  "SELECT id, title, description, status, priority, tags, due_date, scheduled_date, completed_at, recurrence, project_id, parent_id, block_start, block_end, created_at FROM tasks WHERE NOT sync_deleted ORDER BY created_at DESC"
 
 let list_tasks pool =
   let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
@@ -53,7 +55,7 @@ let list_tasks pool =
   | Error _ -> Lwt.return []
 
 let list_deleted_tasks_query = Q.(T.unit ->* task_row_type)
-  "SELECT id, title, description, status, priority, tags, due_date, scheduled_date, completed_at, recurrence, project_id, parent_id, created_at FROM tasks WHERE sync_deleted ORDER BY created_at DESC"
+  "SELECT id, title, description, status, priority, tags, due_date, scheduled_date, completed_at, recurrence, project_id, parent_id, block_start, block_end, created_at FROM tasks WHERE sync_deleted ORDER BY created_at DESC"
 
 let list_deleted_tasks pool =
   let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
@@ -86,10 +88,10 @@ let permanent_delete_task pool ~id =
   | Ok () -> Lwt.return true
   | Error _ -> Lwt.return false
 
-let insert_task_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 string (t2 (option ptime) (t2 (option ptime) (t2 (option string) (t2 (option string) (t2 (option string) (t2 ptime (t2 string ptime))))))))))))) ->. T.unit)
-  "INSERT INTO tasks (id, title, description, status, priority, tags, due_date, scheduled_date, recurrence, project_id, parent_id, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
+let insert_task_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 string (t2 (option ptime) (t2 (option ptime) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option ptime) (t2 (option ptime) (t2 ptime (t2 string ptime))))))))))))))) ->. T.unit)
+  "INSERT INTO tasks (id, title, description, status, priority, tags, due_date, scheduled_date, recurrence, project_id, parent_id, block_start, block_end, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
 
-let create_task pool ~title ?description ?(status=Inbox) ?(priority=P2) ?(tags=[]) ?due_date ?scheduled_date ?recurrence ?project_id ?parent_id () =
+let create_task pool ~title ?description ?(status=Inbox) ?(priority=P2) ?(tags=[]) ?due_date ?scheduled_date ?recurrence ?project_id ?parent_id ?block_start ?block_end () =
   let id = new_uuid () in
   let now = now () in
   let status_str = task_status_to_string status in
@@ -97,8 +99,10 @@ let create_task pool ~title ?description ?(status=Inbox) ?(priority=P2) ?(tags=[
   let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
   let due = Option.map (fun (ts : timestamp) -> ts.time) due_date in
   let sched = Option.map (fun (ts : timestamp) -> ts.time) scheduled_date in
+  let blk_start = Option.map (fun (ts : timestamp) -> ts.time) block_start in
+  let blk_end = Option.map (fun (ts : timestamp) -> ts.time) block_end in
   let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
-    C.exec insert_task_query (id, (title, (description, (status_str, (priority_str, (tags_json, (due, (sched, (recurrence, (project_id, (parent_id, (now, (id, now)))))))))))))
+    C.exec insert_task_query (id, (title, (description, (status_str, (priority_str, (tags_json, (due, (sched, (recurrence, (project_id, (parent_id, (blk_start, (blk_end, (now, (id, now)))))))))))))))
   ) in
   match result with
   | Ok () -> Lwt.return (Some id)
@@ -117,16 +121,18 @@ let update_task_status pool ~id ~status =
   | Ok () -> Lwt.return true
   | Error _ -> Lwt.return false
 
-let update_task_query = Q.(T.(t2 string (t2 (option string) (t2 string (t2 (option string) (t2 (option ptime) (t2 (option ptime) (t2 ptime string))))))) ->. T.unit)
-  "UPDATE tasks SET title = ?, description = ?, tags = ?, recurrence = ?, due_date = ?, scheduled_date = ?, sync_modified_at = ? WHERE id = ?"
+let update_task_query = Q.(T.(t2 string (t2 (option string) (t2 string (t2 (option string) (t2 (option ptime) (t2 (option ptime) (t2 (option ptime) (t2 (option ptime) (t2 ptime string))))))))) ->. T.unit)
+  "UPDATE tasks SET title = ?, description = ?, tags = ?, recurrence = ?, due_date = ?, scheduled_date = ?, block_start = ?, block_end = ?, sync_modified_at = ? WHERE id = ?"
 
-let update_task pool ~id ~title ?description ?(tags=[]) ?recurrence ?due_date ?scheduled_date () =
+let update_task pool ~id ~title ?description ?(tags=[]) ?recurrence ?due_date ?scheduled_date ?block_start ?block_end () =
   let now = now () in
   let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
   let due = Option.map (fun (ts : timestamp) -> ts.time) due_date in
   let sched = Option.map (fun (ts : timestamp) -> ts.time) scheduled_date in
+  let blk_start = Option.map (fun (ts : timestamp) -> ts.time) block_start in
+  let blk_end = Option.map (fun (ts : timestamp) -> ts.time) block_end in
   let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
-    C.exec update_task_query (title, (description, (tags_json, (recurrence, (due, (sched, (now, id)))))))
+    C.exec update_task_query (title, (description, (tags_json, (recurrence, (due, (sched, (blk_start, (blk_end, (now, id)))))))))
   ) in
   match result with
   | Ok () -> Lwt.return true
@@ -145,14 +151,15 @@ let delete_task pool ~id =
   | Error _ -> Lwt.return false
 
 (* Upsert task for sync - insert or update based on existence *)
-let upsert_task_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 string (t2 (option ptime) (t2 (option ptime) (t2 (option string) (t2 (option string) (t2 (option string) (t2 ptime (t2 string (t2 ptime bool)))))))))))))) ->. T.unit)
-  "INSERT INTO tasks (id, title, description, status, priority, tags, due_date, scheduled_date, recurrence, project_id, parent_id, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+let upsert_task_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 string (t2 (option ptime) (t2 (option ptime) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option ptime) (t2 (option ptime) (t2 ptime (t2 string (t2 ptime bool)))))))))))))))) ->. T.unit)
+  "INSERT INTO tasks (id, title, description, status, priority, tags, due_date, scheduled_date, recurrence, project_id, parent_id, block_start, block_end, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
    ON CONFLICT(id) DO UPDATE SET 
      title = excluded.title, description = excluded.description, status = excluded.status, 
      priority = excluded.priority, tags = excluded.tags, due_date = excluded.due_date,
      scheduled_date = excluded.scheduled_date, recurrence = excluded.recurrence,
      project_id = excluded.project_id, parent_id = excluded.parent_id,
+     block_start = excluded.block_start, block_end = excluded.block_end,
      sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted,
      sync_version = sync_version + 1"
 
@@ -162,8 +169,10 @@ let upsert_task pool (task : task) =
   let tags_json = `List (List.map (fun t -> `String t) task.tags) |> Yojson.Safe.to_string in
   let due = Option.map (fun (ts : timestamp) -> ts.time) task.due_date in
   let sched = Option.map (fun (ts : timestamp) -> ts.time) task.scheduled_date in
+  let blk_start = Option.map (fun (ts : timestamp) -> ts.time) task.block_start in
+  let blk_end = Option.map (fun (ts : timestamp) -> ts.time) task.block_end in
   let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
-    C.exec upsert_task_query (task.id, (task.title, (task.description, (status_str, (priority_str, (tags_json, (due, (sched, (task.recurrence, (task.project_id, (task.parent_id, (task.created_at.time, (task.sync.local_id, (task.sync.modified_at.time, task.sync.deleted))))))))))))))
+    C.exec upsert_task_query (task.id, (task.title, (task.description, (status_str, (priority_str, (tags_json, (due, (sched, (task.recurrence, (task.project_id, (task.parent_id, (blk_start, (blk_end, (task.created_at.time, (task.sync.local_id, (task.sync.modified_at.time, task.sync.deleted))))))))))))))))
   ) in
   match result with
   | Ok () -> Lwt.return true

@@ -42,7 +42,7 @@ type status_message = {
 type form_field = {
   name: string;
   value: string;
-  field_type: [`Text | `MultiLine | `Date | `Select of string list | `MultiSelect of string list];
+  field_type: [`Text | `MultiLine | `Date | `DateTime | `Select of string list | `MultiSelect of string list];
 }
 
 (** Form state for editing entities *)

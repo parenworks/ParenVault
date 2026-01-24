@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   recurrence TEXT,
   parent_id TEXT REFERENCES tasks(id),
   project_id TEXT REFERENCES projects(id),
+  block_start TEXT,
+  block_end TEXT,
   created_at TEXT NOT NULL,
   -- Sync metadata
   sync_local_id TEXT NOT NULL,
@@ -228,6 +230,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   recurrence TEXT,
   parent_id TEXT REFERENCES tasks(id),
   project_id TEXT REFERENCES projects(id),
+  block_start TIMESTAMPTZ,
+  block_end TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL,
   -- Sync metadata
   sync_local_id TEXT NOT NULL,
@@ -353,6 +357,17 @@ CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time) WHERE NOT sync
 CREATE INDEX IF NOT EXISTS idx_email_refs_message_id ON email_refs(message_id);
 |}
 
+(** Migration SQL for adding time blocking columns to existing databases *)
+let sqlite_migrations = {|
+ALTER TABLE tasks ADD COLUMN block_start TEXT;
+ALTER TABLE tasks ADD COLUMN block_end TEXT
+|}
+
+let postgres_migrations = {|
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS block_start TIMESTAMPTZ;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS block_end TIMESTAMPTZ
+|}
+
 (** Run schema migration on a connection *)
 let migrate_sqlite pool =
   let exec_sql sql =
@@ -374,7 +389,26 @@ let migrate_sqlite pool =
       exec_all statements
     ) pool
   in
-  exec_sql sqlite_schema
+  let exec_migration sql =
+    Caqti_lwt_unix.Pool.use (fun (module C : Caqti_lwt.CONNECTION) ->
+      let statements = String.split_on_char ';' sql in
+      let rec exec_all = function
+        | [] -> Lwt.return (Ok ())
+        | stmt :: rest ->
+          let stmt = String.trim stmt in
+          if stmt = "" then exec_all rest
+          else
+            let query = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) stmt in
+            let* result = C.exec query () in
+            match result with
+            | Ok () -> exec_all rest
+            | Error _ -> exec_all rest  (* Ignore errors for migrations - column may already exist *)
+      in
+      exec_all statements
+    ) pool
+  in
+  let* _ = exec_sql sqlite_schema in
+  exec_migration sqlite_migrations
 
 let migrate_postgres pool =
   let exec_sql sql =
@@ -395,4 +429,23 @@ let migrate_postgres pool =
       exec_all statements
     ) pool
   in
-  exec_sql postgres_schema
+  let exec_migration sql =
+    Caqti_lwt_unix.Pool.use (fun (module C : Caqti_lwt.CONNECTION) ->
+      let statements = String.split_on_char ';' sql in
+      let rec exec_all = function
+        | [] -> Lwt.return (Ok ())
+        | stmt :: rest ->
+          let stmt = String.trim stmt in
+          if stmt = "" then exec_all rest
+          else
+            let query = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) stmt in
+            let* result = C.exec query () in
+            match result with
+            | Ok () -> exec_all rest
+            | Error _ -> exec_all rest  (* Ignore errors - column may already exist *)
+      in
+      exec_all statements
+    ) pool
+  in
+  let* _ = exec_sql postgres_schema in
+  exec_migration postgres_migrations

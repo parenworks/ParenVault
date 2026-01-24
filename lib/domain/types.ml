@@ -84,6 +84,8 @@ type task = {
   recurrence: string option;    (** None, Daily, Weekly, Monthly, Yearly *)
   parent_id: uuid option;       (** For subtasks *)
   project_id: uuid option;      (** Associated project *)
+  block_start: timestamp option; (** Time block start for calendar view *)
+  block_end: timestamp option;   (** Time block end for calendar view *)
   created_at: timestamp;
   sync: sync_meta;
 }

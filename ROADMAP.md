@@ -22,7 +22,7 @@ A checklist of planned features for the ParenVault PKM application.
 - [ ] **Templates** - Predefined structures for common note/task types
 - [x] **Archive** - Hide completed items but keep them searchable
 - [x] **Subtasks/Checklists** - Nested tasks within a parent task
-- [ ] **Time Blocking** - Assign time slots to tasks
+- [x] **Time Blocking** - Assign time slots to tasks (Block Start/End fields in task form)
 
 ---
 
@@ -92,3 +92,4 @@ All initial sprint features are done:
 - [x] Auto schema creation on startup (tables created automatically on new machines)
 - [x] Bidirectional sync on startup (local ↔ remote PostgreSQL)
 - [x] Linking entities (`L` key to link, Enter to open linked item, `d` to delete link)
+- [x] Time Blocking (Block Start/End datetime fields in task form, displayed in task detail)

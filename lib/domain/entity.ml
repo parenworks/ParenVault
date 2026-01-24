@@ -38,7 +38,7 @@ let soft_delete sync =
 
 (** Create a new task *)
 let create_task ~device_id ~title ?description ?(priority = P2) ?(tags = []) 
-    ?due_date ?scheduled_date ?parent_id ?project_id () : task =
+    ?due_date ?scheduled_date ?parent_id ?project_id ?block_start ?block_end () : task =
   let now = now () in
   {
     id = new_uuid ();
@@ -53,6 +53,8 @@ let create_task ~device_id ~title ?description ?(priority = P2) ?(tags = [])
     recurrence = None;
     parent_id;
     project_id;
+    block_start;
+    block_end;
     created_at = now;
     sync = new_sync_meta ~device_id;
   }
