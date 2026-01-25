@@ -911,8 +911,8 @@ let render_form ~title (form : Model.form_state) term_width =
          string border_attr "]" <|>
          string A.(fg yellow) hint)
     | `Date ->
-      let hint = if focused then " (YYYY-MM-DD)" else "" in
-      let value_display = if field.value = "" then "____-__-__" else field.value in
+      let hint = if focused then " (DD-MMM-YYYY)" else "" in
+      let value_display = if field.value = "" then "__-___-____" else field.value in
       I.(string A.empty ("  " ^ indicator ^ " ") <|> 
          string label_attr (field.name ^ ": ") <|>
          string border_attr "[" <|>
@@ -920,8 +920,8 @@ let render_form ~title (form : Model.form_state) term_width =
          string border_attr "]" <|>
          string A.(fg (gray 10)) hint)
     | `DateTime ->
-      let hint = if focused then " (YYYY-MM-DD HH:MM)" else "" in
-      let value_display = if field.value = "" then "____-__-__ __:__" else field.value in
+      let hint = if focused then " (DD-MMM-YYYY HH:MM)" else "" in
+      let value_display = if field.value = "" then "__-___-____ __:__" else field.value in
       I.(string A.empty ("  " ^ indicator ^ " ") <|> 
          string label_attr (field.name ^ ": ") <|>
          string border_attr "[" <|>
@@ -2283,7 +2283,26 @@ let run ~config () =
       let status = Some { text = "Cannot delete from this view"; level = `Warning; expires_at = None } in
       Lwt.return { model with status }
   in
+  (* Track current date for day-change detection *)
+  let current_date = ref (Ptime.to_date (Ptime_clock.now ())) in
   let rec loop model =
+    (* Check if day has changed - refresh data if so *)
+    let now_date = Ptime.to_date (Ptime_clock.now ()) in
+    let* model = 
+      if now_date <> !current_date then begin
+        current_date := now_date;
+        (* Reload data from database *)
+        match db_pool with
+        | Some p ->
+          let* tasks = Storage.Queries.list_tasks p in
+          let* notes = Storage.Queries.list_notes p in
+          let* events = Storage.Queries.list_events p in
+          let status = Some { text = "Day changed - data refreshed"; level = `Info; expires_at = None } in
+          Lwt.return { model with tasks; notes; events; status }
+        | None -> Lwt.return model
+      end else
+        Lwt.return model
+    in
     let (w, h) = Term.size term in
     let model = { model with width = w; height = h } in
     let img = render model (w, h) in
