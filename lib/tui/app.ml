@@ -1384,7 +1384,8 @@ let handle_key model key =
   match key with
   | `ASCII 'q' when model.input_mode = Normal -> `Quit
   | `Escape when model.input_mode = Normal -> 
-    `Continue (update model GoBack)
+    (* GoBack is handled in main loop to reload attachments/links *)
+    `GoBack
   | `Escape -> 
     `Continue (update model ExitInsertMode)
   | `ASCII 'j' | `Arrow `Down when model.input_mode = Normal -> 
@@ -2675,8 +2676,19 @@ let run ~config () =
                loop { new_model with current_links = links; link_index = 0 }
              | _ -> loop new_model)
           | TaskDetail id, Some p ->
+            (* Check if subtask is selected - open it *)
+            let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some id) model.tasks in
+            if subtasks <> [] && model.attachment_index < 0 && model.subtask_index >= 0 && model.subtask_index < List.length subtasks then
+              (match List.nth_opt subtasks model.subtask_index with
+               | Some subtask ->
+                 let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:subtask.id in
+                 let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:subtask.id in
+                 let sub_subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some subtask.id) model.tasks in
+                 let att_idx = if sub_subtasks <> [] then -1 else 0 in
+                 loop { model with view = TaskDetail subtask.id; previous_views = model.view :: model.previous_views; current_attachments = attachments; attachment_index = att_idx; current_links = links; link_index = 0; subtask_index = 0 }
+               | None -> loop model)
             (* Check if attachment is selected - open it *)
-            if model.current_attachments <> [] && model.attachment_index >= 0 && model.attachment_index < List.length model.current_attachments then
+            else if model.current_attachments <> [] && model.attachment_index >= 0 && model.attachment_index < List.length model.current_attachments then
               (match List.nth_opt model.current_attachments model.attachment_index with
                | Some att ->
                  let attachments_dir = Filename.concat (Sys.getenv "HOME") ".local/share/parenvault/attachments" in
@@ -2764,6 +2776,30 @@ let run ~config () =
           | `Quit -> 
             let* () = Term.release term in
             Lwt.return ()
+          | `GoBack ->
+            (* Handle GoBack with DB access to reload attachments/links *)
+            (match model.previous_views, db_pool with
+             | prev :: rest, Some p ->
+               (match prev with
+                | TaskDetail id ->
+                  let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:id in
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:id in
+                  let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some id) model.tasks in
+                  let att_idx = if subtasks <> [] then -1 else 0 in
+                  loop { model with view = prev; previous_views = rest; selected_index = 0; current_attachments = attachments; attachment_index = att_idx; current_links = links; link_index = 0; subtask_index = 0 }
+                | NoteDetail id ->
+                  let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"note" ~entity_id:id in
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"note" ~entity_id:id in
+                  loop { model with view = prev; previous_views = rest; selected_index = 0; current_attachments = attachments; attachment_index = 0; current_links = links; link_index = 0 }
+                | ProjectDetail id ->
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"project" ~entity_id:id in
+                  loop { model with view = prev; previous_views = rest; selected_index = 0; current_links = links; link_index = 0 }
+                | _ ->
+                  loop { model with view = prev; previous_views = rest; selected_index = 0 })
+             | prev :: rest, None ->
+               loop { model with view = prev; previous_views = rest; selected_index = 0 }
+             | [], _ ->
+               loop { model with view = Dashboard; selected_index = 0 })
           | `Continue new_model -> loop new_model))
     | Some (`Resize (w, h)) ->
       loop (Update.update model (Resize (w, h)))
