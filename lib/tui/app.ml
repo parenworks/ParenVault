@@ -2675,8 +2675,18 @@ let run ~config () =
                loop { new_model with current_links = links; link_index = 0 }
              | _ -> loop new_model)
           | TaskDetail id, Some p ->
-            (* Open linked item from task detail *)
-            if model.current_links <> [] && model.link_index >= 0 && model.link_index < List.length model.current_links then
+            (* Check if attachment is selected - open it *)
+            if model.current_attachments <> [] && model.attachment_index >= 0 && model.attachment_index < List.length model.current_attachments then
+              (match List.nth_opt model.current_attachments model.attachment_index with
+               | Some att ->
+                 let attachments_dir = Filename.concat (Sys.getenv "HOME") ".local/share/parenvault/attachments" in
+                 let full_path = Filename.concat attachments_dir att.Domain.Types.filepath in
+                 let _ = Unix.create_process "xdg-open" [|"xdg-open"; full_path|] Unix.stdin Unix.stdout Unix.stderr in
+                 let status = Some { text = "Opening: " ^ att.filename; level = `Info; expires_at = None } in
+                 loop { model with status }
+               | None -> loop model)
+            (* Otherwise check if link is selected - open linked item *)
+            else if model.current_links <> [] && model.link_index >= 0 && model.link_index < List.length model.current_links then
               (match List.nth_opt model.current_links model.link_index with
                | Some link ->
                  let (other_type, other_id) = 
@@ -2702,6 +2712,19 @@ let run ~config () =
                   | "contact" ->
                     loop { model with view = ContactDetail other_id; previous_views = model.view :: model.previous_views }
                   | _ -> loop model)
+               | None -> loop model)
+            else
+              loop model
+          | NoteDetail _, Some _ ->
+            (* Check if attachment is selected - open it *)
+            if model.current_attachments <> [] && model.attachment_index >= 0 && model.attachment_index < List.length model.current_attachments then
+              (match List.nth_opt model.current_attachments model.attachment_index with
+               | Some att ->
+                 let attachments_dir = Filename.concat (Sys.getenv "HOME") ".local/share/parenvault/attachments" in
+                 let full_path = Filename.concat attachments_dir att.Domain.Types.filepath in
+                 let _ = Unix.create_process "xdg-open" [|"xdg-open"; full_path|] Unix.stdin Unix.stdout Unix.stderr in
+                 let status = Some { text = "Opening: " ^ att.filename; level = `Info; expires_at = None } in
+                 loop { model with status }
                | None -> loop model)
             else
               loop model
