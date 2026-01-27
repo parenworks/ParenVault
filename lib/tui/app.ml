@@ -213,16 +213,37 @@ let render_dashboard model width =
   let today = Ptime.to_date now in
   let today_str = format_date_dmy today in
   
-  (* Filter tasks due today *)
+  (* Get today's weekday for recurring task matching *)
+  let today_weekday = Ptime.weekday now in
+  let weekday_str = match today_weekday with
+    | `Mon -> "Mon" | `Tue -> "Tue" | `Wed -> "Wed" | `Thu -> "Thu"
+    | `Fri -> "Fri" | `Sat -> "Sat" | `Sun -> "Sun"
+  in
+  
+  (* Check if recurrence matches today's weekday *)
+  let contains_substring haystack needle =
+    try
+      let _ = Str.search_forward (Str.regexp_string needle) haystack 0 in true
+    with Not_found -> false
+  in
+  let recurrence_matches_today recurrence_opt =
+    match recurrence_opt with
+    | Some r when r <> "None" -> contains_substring r weekday_str
+    | _ -> false
+  in
+  
+  (* Filter tasks due today OR recurring tasks that match today's weekday *)
   let tasks_due_today = List.filter (fun (t : task) -> 
-    match t.due_date with
-    | Some d -> Ptime.to_date d.time = today && t.status <> Done && t.status <> Cancelled
-    | None -> false
+    t.status <> Done && t.status <> Cancelled &&
+    (match t.due_date with
+     | Some d -> Ptime.to_date d.time = today
+     | None -> false) 
+    || recurrence_matches_today t.recurrence
   ) model.tasks in
   
-  (* Filter events for today *)
+  (* Filter events for today OR recurring events that match today's weekday *)
   let events_today = List.filter (fun (e : event) ->
-    Ptime.to_date e.start_time.time = today
+    Ptime.to_date e.start_time.time = today || recurrence_matches_today e.recurrence
   ) model.events in
   
   (* Stats *)
@@ -986,8 +1007,7 @@ let render model (width, height) =
          (* Format time block *)
          let format_datetime_opt ts_opt = match ts_opt with
            | Some ts -> 
-             let (y, m, d) = Ptime.to_date ts.Domain.Types.time in
-             let ((hh, mm, _), _) = Ptime.to_date_time ts.Domain.Types.time in
+             let ((y, m, d), ((hh, mm, _), _)) = Ptime.to_date_time ts.Domain.Types.time in
              Printf.sprintf "%02d-%s-%04d %02d:%02d" d months.(m - 1) y hh mm
            | None -> ""
          in
@@ -1897,12 +1917,41 @@ let run ~config () =
         in
         let due_date = Option.bind (get_field_value form "Due Date") parse_date |> make_timestamp in
         let scheduled_date = Option.bind (get_field_value form "Scheduled") parse_date |> make_timestamp in
-        (* Parse datetime fields for time blocking *)
+        (* Parse datetime fields for time blocking - accepts both YYYY-MM-DD HH:MM and DD-MON-YYYY HH:MM *)
         let parse_datetime s =
-          try
-            Scanf.sscanf s "%d-%d-%d %d:%d" (fun y mo d hh mm ->
-              Some (y, mo, d, hh, mm))
-          with _ -> None
+          let months = [("JAN",1);("FEB",2);("MAR",3);("APR",4);("MAY",5);("JUN",6);
+                        ("JUL",7);("AUG",8);("SEP",9);("OCT",10);("NOV",11);("DEC",12)] in
+          let s = String.trim s in
+          let is_alpha c = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') in
+          (* Split on space to get date and time parts *)
+          match String.split_on_char ' ' s with
+          | [date_part; time_part] ->
+            let date_parts = String.split_on_char '-' date_part in
+            let time_parts = String.split_on_char ':' time_part in
+            (match date_parts, time_parts with
+             (* DD-MON-YYYY format - middle part starts with letter *)
+             | [d_str; mon_str; y_str], [hh_str; mm_str] 
+                 when String.length mon_str >= 3 && is_alpha mon_str.[0] ->
+               (try
+                 let d = int_of_string d_str in
+                 let y = int_of_string y_str in
+                 let hh = int_of_string hh_str in
+                 let mm = int_of_string mm_str in
+                 let mo = List.assoc (String.uppercase_ascii mon_str) months in
+                 Some (y, mo, d, hh, mm)
+               with _ -> None)
+             (* YYYY-MM-DD format - all numeric *)
+             | [y_str; mo_str; d_str], [hh_str; mm_str] ->
+               (try
+                 let y = int_of_string y_str in
+                 let mo = int_of_string mo_str in
+                 let d = int_of_string d_str in
+                 let hh = int_of_string hh_str in
+                 let mm = int_of_string mm_str in
+                 Some (y, mo, d, hh, mm)
+               with _ -> None)
+             | _ -> None)
+          | _ -> None
         in
         let make_datetime_timestamp dt_opt =
           match dt_opt with
@@ -2066,12 +2115,41 @@ let run ~config () =
         in
         let due_date = Option.bind (get_field_value form "Due Date") parse_date |> make_timestamp in
         let scheduled_date = Option.bind (get_field_value form "Scheduled") parse_date |> make_timestamp in
-        (* Parse datetime fields for time blocking *)
+        (* Parse datetime fields for time blocking - accepts both YYYY-MM-DD HH:MM and DD-MON-YYYY HH:MM *)
         let parse_datetime s =
-          try
-            Scanf.sscanf s "%d-%d-%d %d:%d" (fun y mo d hh mm ->
-              Some (y, mo, d, hh, mm))
-          with _ -> None
+          let months = [("JAN",1);("FEB",2);("MAR",3);("APR",4);("MAY",5);("JUN",6);
+                        ("JUL",7);("AUG",8);("SEP",9);("OCT",10);("NOV",11);("DEC",12)] in
+          let s = String.trim s in
+          let is_alpha c = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') in
+          (* Split on space to get date and time parts *)
+          match String.split_on_char ' ' s with
+          | [date_part; time_part] ->
+            let date_parts = String.split_on_char '-' date_part in
+            let time_parts = String.split_on_char ':' time_part in
+            (match date_parts, time_parts with
+             (* DD-MON-YYYY format - middle part starts with letter *)
+             | [d_str; mon_str; y_str], [hh_str; mm_str] 
+                 when String.length mon_str >= 3 && is_alpha mon_str.[0] ->
+               (try
+                 let d = int_of_string d_str in
+                 let y = int_of_string y_str in
+                 let hh = int_of_string hh_str in
+                 let mm = int_of_string mm_str in
+                 let mo = List.assoc (String.uppercase_ascii mon_str) months in
+                 Some (y, mo, d, hh, mm)
+               with _ -> None)
+             (* YYYY-MM-DD format - all numeric *)
+             | [y_str; mo_str; d_str], [hh_str; mm_str] ->
+               (try
+                 let y = int_of_string y_str in
+                 let mo = int_of_string mo_str in
+                 let d = int_of_string d_str in
+                 let hh = int_of_string hh_str in
+                 let mm = int_of_string mm_str in
+                 Some (y, mo, d, hh, mm)
+               with _ -> None)
+             | _ -> None)
+          | _ -> None
         in
         let make_datetime_timestamp dt_opt =
           match dt_opt with

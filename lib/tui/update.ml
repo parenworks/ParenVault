@@ -295,8 +295,7 @@ let update model msg =
           let scheduled_val = format_date_opt task.scheduled_date in
           let format_datetime_opt ts_opt = match ts_opt with
             | Some ts -> 
-              let (y, m, d) = Ptime.to_date ts.Domain.Types.time in
-              let ((hh, mm, _), _) = Ptime.to_date_time ts.Domain.Types.time in
+              let ((y, m, d), ((hh, mm, _), _)) = Ptime.to_date_time ts.Domain.Types.time in
               Printf.sprintf "%04d-%02d-%02d %02d:%02d" y m d hh mm
             | None -> ""
           in
