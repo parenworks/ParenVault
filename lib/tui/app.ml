@@ -844,7 +844,7 @@ let render_footer model term_width =
     | Command -> "COMMAND"
   in
   let mode = I.string A.(st bold) (Printf.sprintf "[%s]" mode_str) in
-  let nav_hint = "1:Dash 2:Tasks 3:Notes 4:Cal 5:Proj 6:Contacts 7:Co 8:Deals 9:Activity 0:Inbox" in
+  let nav_hint = "1:Dash 2:Tasks 3:Notes 4:Cal 5:Proj 6:Con 7:Co 8:Deals 9:Act 0:In A:Archive" in
   let help = match model.view with
     | TaskList | Inbox -> "j/k:nav Enter:open n:new c:capture x:done d:del D:daily | " ^ nav_hint
     | Dashboard -> "j/k:nav Enter:open n:new c:capture D:daily | " ^ nav_hint
@@ -3012,8 +3012,7 @@ let run ~config () =
             let status = Some { text = "Enter file path (or drag file): "; level = `Info; expires_at = None } in
             loop { model with input_mode = Command; input_buffer = ""; status }
           | _ ->
-            let status = Some { text = "Attachments only work in Task/Note detail views"; level = `Warning; expires_at = None } in
-            loop { model with status })
+            loop (Update.update model (Navigate Archive)))
        | `ASCII 'r', Normal ->
          (* Restore from archive *)
          (match model.view, db_pool with

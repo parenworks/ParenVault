@@ -862,6 +862,9 @@ let key_to_msg model key =
      | "9" -> Some (Navigate ActivityList)
      | "0" -> Some (Navigate Inbox)
      
+     (* Archive *)
+     | "A" -> Some (Navigate Archive)
+     
      (* Priority shortcuts *)
      | "!" -> Some (SetTaskPriority Domain.Types.P0)
      | "@" -> Some (SetTaskPriority Domain.Types.P1)
