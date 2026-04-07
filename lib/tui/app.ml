@@ -2893,8 +2893,12 @@ let run ~config () =
           let* tasks = Storage.Queries.list_tasks p in
           let* notes = Storage.Queries.list_notes p in
           let* events = Storage.Queries.list_events p in
+          let* contacts = Storage.Queries.list_contacts p in
+          let* companies = Storage.Queries.list_companies p in
+          let* deals = Storage.Queries.list_deals p in
+          let* activities = Storage.Queries.list_activities p in
           let status = Some { text = "Day changed - data refreshed"; level = `Info; expires_at = None } in
-          Lwt.return { model with tasks; notes; events; status }
+          Lwt.return { model with tasks; notes; events; contacts; companies; deals; activities; status }
         | None -> Lwt.return model
       end else
         Lwt.return model

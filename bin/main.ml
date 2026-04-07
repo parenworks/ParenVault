@@ -99,18 +99,27 @@ let add_cmd =
       | Some p -> p
       | None -> Domain.Types.P2
     in
-    let tags = if tags = "" then [] else String.split_on_char ',' tags in
-    let task = Domain.Entity.create_task 
-      ~device_id:config.device_id 
-      ~title 
-      ~priority
-      ~tags
-      ()
-    in
-    Printf.printf "Created task: %s (ID: %s)\n" task.title task.id;
-    Printf.printf "Priority: %s\n" (Domain.Types.priority_to_string task.priority);
-    if tags <> [] then
-      Printf.printf "Tags: %s\n" (String.concat ", " tags)
+    let tags = if tags = "" then [] else String.split_on_char ',' tags |> List.map String.trim in
+    Lwt_main.run (
+      let open Lwt.Syntax in
+      let* db_result = Storage.Db.init ~local_path:config.db.local_path () in
+      match db_result with
+      | Ok ctx ->
+        let pool = Storage.Db.local ctx in
+        let* result = Storage.Queries.create_task pool ~title ~description:"" ~priority ~tags () in
+        (match result with
+         | Some id ->
+           Printf.printf "Created task: %s (ID: %s)\n" title (String.sub id 0 8);
+           Printf.printf "Priority: %s\n" (Domain.Types.priority_to_string priority);
+           if tags <> [] then
+             Printf.printf "Tags: %s\n" (String.concat ", " tags)
+         | None ->
+           Printf.eprintf "Failed to create task\n");
+        Lwt.return ()
+      | Error msg ->
+        Printf.eprintf "Failed to connect to database: %s\n" msg;
+        Lwt.return ()
+    )
   in
   let doc = "Add a new task from command line" in
   let info = Cmd.info "add" ~doc in
@@ -127,8 +136,33 @@ let list_cmd =
     Arg.(value & opt (some string) None & info ["s"; "status"] ~docv:"STATUS" ~doc)
   in
   let run config_path _status =
-    let _config = init_app config_path in
-    Printf.printf "Task listing not yet implemented (requires database).\n"
+    let config = init_app config_path in
+    Lwt_main.run (
+      let open Lwt.Syntax in
+      let* db_result = Storage.Db.init ~local_path:config.db.local_path () in
+      match db_result with
+      | Ok ctx ->
+        let pool = Storage.Db.local ctx in
+        let* tasks = Storage.Queries.list_tasks pool in
+        if tasks = [] then
+          Printf.printf "No tasks found.\n"
+        else begin
+          Printf.printf "%-8s  %-4s  %-8s  %s\n" "ID" "Pri" "Status" "Title";
+          Printf.printf "%s\n" (String.make 60 '-');
+          List.iter (fun (t : Domain.Types.task) ->
+            let short_id = if String.length t.id >= 8 then String.sub t.id 0 8 else t.id in
+            Printf.printf "%-8s  %-4s  %-8s  %s\n"
+              short_id
+              (Domain.Types.priority_to_string t.priority)
+              (Domain.Types.task_status_to_string t.status)
+              t.title
+          ) tasks
+        end;
+        Lwt.return ()
+      | Error msg ->
+        Printf.eprintf "Failed to connect to database: %s\n" msg;
+        Lwt.return ()
+    )
   in
   let doc = "List tasks" in
   let info = Cmd.info "list" ~doc in
@@ -288,7 +322,7 @@ let import_email_cmd =
         String.sub content (pos + 2) (String.length content - pos - 2)
       with Not_found -> ""
     in
-    let body_preview = if String.length body > 500 then String.sub body 0 500 ^ "..." else body in
+    let body_preview = if String.length body > 2000 then String.sub body 0 2000 ^ "\n\n[truncated]" else body in
     (* Create task or note *)
     if as_note then begin
       let note = Domain.Entity.create_note
@@ -337,7 +371,7 @@ let import_email_cmd =
       )
     end
   in
-  let doc = "Import email as task (or note with -n). Reads RFC 2822 email from stdin." in
+  let doc = "Import email as task (or note with -n). Reads RFC 2822 email from stdin. In aerc: :pipe parenvault import-email (or :pipe parenvault import-email -n for notes)." in
   let info = Cmd.info "import-email" ~doc in
   Cmd.v info Term.(const run $ config_file $ as_note)
 
@@ -416,7 +450,12 @@ let send_cmd =
 let main_cmd =
   let doc = "Personal Knowledge Management TUI with offline-first sync" in
   let info = Cmd.info "parenvault" ~version:"0.1.0" ~doc in
-  let default = Term.(ret (const (`Help (`Pager, None)))) in
-  Cmd.group info ~default [tui_cmd; sync_cmd; add_cmd; list_cmd; init_cmd; install_cmd; import_email_cmd; send_cmd]
+  let default_run =
+    let config_file =
+      Arg.(value & opt string (Config.config_path ()) & info ["c"; "config"] ~docv:"FILE" ~doc:"Path to configuration file.")
+    in
+    Term.(const (fun config_path -> let config = init_app config_path in run_tui config) $ config_file)
+  in
+  Cmd.group info ~default:default_run [tui_cmd; sync_cmd; add_cmd; list_cmd; init_cmd; install_cmd; import_email_cmd; send_cmd]
 
 let () = exit (Cmd.eval main_cmd)
