@@ -331,47 +331,61 @@ let import_email_cmd =
         Base64.decode_exn clean
       with _ -> s
     in
-    (* Try to extract text/plain part from MIME multipart *)
+    (* Extract text/plain body from MIME or raw email *)
     let body_text =
-      let raw = strip_cr raw_body in
-      (* Look for text/plain content *)
+      let raw = strip_cr raw_body |> String.trim in
       let lines = String.split_on_char '\n' raw in
-      let rec find_text_plain in_plain is_base64 acc = function
-        | [] -> 
+      (* State machine: scan for text/plain part, collect its content *)
+      let rec scan found_plain is_base64 past_headers acc = function
+        | [] ->
           if acc <> [] then
             let text = String.concat "\n" (List.rev acc) in
             if is_base64 then decode_base64 text else text
-          else strip_cr raw_body
+          else raw
         | line :: rest ->
-          if String.length line > 2 && line.[0] = '-' && line.[1] = '-' then begin
-            if in_plain && acc <> [] then
+          let trimmed = String.trim line in
+          if String.length trimmed >= 2 && trimmed.[0] = '-' && trimmed.[1] = '-' then begin
+            (* Hit a MIME boundary *)
+            if found_plain && past_headers && acc <> [] then
+              (* We already collected text/plain content, return it *)
               let text = String.concat "\n" (List.rev acc) in
               if is_base64 then decode_base64 text else text
             else
-              find_text_plain false false [] rest
-          end else if not in_plain then begin
-            let lower = String.lowercase_ascii line in
-            if Str.string_match (Str.regexp ".*content-type:.*text/plain") lower 0 then
-              find_text_plain true is_base64 acc rest
-            else if Str.string_match (Str.regexp ".*content-transfer-encoding:.*base64") lower 0 then
-              find_text_plain in_plain true acc rest
-            else if line = "" && in_plain then
-              find_text_plain true is_base64 acc rest
+              (* New MIME part starting, reset state *)
+              scan false false false [] rest
+          end else if not found_plain then begin
+            let lower = String.lowercase_ascii trimmed in
+            if String.length lower > 0 && (
+              try let _ = Str.search_forward (Str.regexp_string "content-type:") lower 0 in
+                  let _ = Str.search_forward (Str.regexp_string "text/plain") lower 0 in true
+              with Not_found -> false) then
+              scan true is_base64 false acc rest
+            else if String.length lower > 0 && (
+              try let _ = Str.search_forward (Str.regexp_string "content-transfer-encoding:") lower 0 in
+                  let _ = Str.search_forward (Str.regexp_string "base64") lower 0 in true
+              with Not_found -> false) then
+              scan found_plain true past_headers acc rest
             else
-              find_text_plain false is_base64 acc rest
+              scan false is_base64 false acc rest
+          end else if not past_headers then begin
+            let lower = String.lowercase_ascii trimmed in
+            if trimmed = "" then
+              scan true is_base64 true acc rest
+            else if String.length lower > 0 && (
+              try let _ = Str.search_forward (Str.regexp_string "content-transfer-encoding:") lower 0 in
+                  let _ = Str.search_forward (Str.regexp_string "base64") lower 0 in true
+              with Not_found -> false) then
+              scan true true false acc rest
+            else
+              scan true is_base64 false acc rest
           end else begin
-            if line = "" && acc = [] then
-              find_text_plain true is_base64 acc rest
-            else
-              find_text_plain true is_base64 (line :: acc) rest
+            scan true is_base64 true (line :: acc) rest
           end
       in
-      (* Check if this is a multipart email *)
-      if Str.string_match (Str.regexp ".*--_[0-9]") raw 0 ||
-         Str.string_match (Str.regexp ".*------") raw 0 then
-        find_text_plain false false [] lines
-      else
-        strip_cr raw_body
+      (* Check if body contains MIME boundaries *)
+      let has_mime = try let _ = Str.search_forward (Str.regexp_string "Content-Type:") raw 0 in true with Not_found -> false in
+      if has_mime then scan false false false [] lines
+      else raw
     in
     let body_preview = if String.length body_text > 2000 then String.sub body_text 0 2000 ^ "\n\n[truncated]" else body_text in
     (* Create task or note *)
