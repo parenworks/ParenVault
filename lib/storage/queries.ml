@@ -494,6 +494,192 @@ let delete_contact pool ~id =
   | Error _ -> Lwt.return false
 
 (* ============================================
+   COMPANY QUERIES
+   ============================================ *)
+
+let company_of_row (id, (name, (website, (industry, (address, (phone, (email, (notes, (tags_json, created_at))))))))) =
+  let tags = try Yojson.Safe.from_string tags_json |> Yojson.Safe.Util.to_list |> List.map Yojson.Safe.Util.to_string with _ -> [] in
+  {
+    id;
+    name;
+    website;
+    industry;
+    address;
+    phone;
+    email;
+    notes;
+    tags;
+    created_at = { time = created_at; timezone = None };
+    sync = { local_id = id; version = 1; modified_at = { time = created_at; timezone = None }; synced_at = None; deleted = false };
+  }
+
+let company_row_type = T.(t2 string (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 string ptime)))))))))
+
+let list_companies_query = Q.(T.unit ->* company_row_type)
+  "SELECT id, name, website, industry, address, phone, email, notes, tags, created_at FROM companies WHERE NOT sync_deleted ORDER BY name ASC"
+
+let list_companies pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_companies_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map company_of_row rows)
+  | Error _ -> Lwt.return []
+
+let insert_company_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 string (t2 ptime (t2 string ptime))))))))))) ->. T.unit)
+  "INSERT INTO companies (id, name, website, industry, address, phone, email, notes, tags, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
+
+let create_company pool ~name ?website ?industry ?address ?phone ?email ?notes ?(tags=[]) () =
+  let id = new_uuid () in
+  let now = now () in
+  let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec insert_company_query (id, (name, (website, (industry, (address, (phone, (email, (notes, (tags_json, (now, (id, now)))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return (Some id)
+  | Error _ -> Lwt.return None
+
+let update_company_query = Q.(T.(t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 string (t2 ptime string))))))))) ->. T.unit)
+  "UPDATE companies SET name = ?, website = ?, industry = ?, address = ?, phone = ?, email = ?, notes = ?, tags = ?, sync_modified_at = ? WHERE id = ?"
+
+let update_company pool ~id ~name ?website ?industry ?address ?phone ?email ?notes ?(tags=[]) () =
+  let now = now () in
+  let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec update_company_query (name, (website, (industry, (address, (phone, (email, (notes, (tags_json, (now, id)))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let delete_company_query = Q.(T.(t2 ptime string) ->. T.unit)
+  "UPDATE companies SET sync_deleted = TRUE, sync_modified_at = ? WHERE id = ?"
+
+let delete_company pool ~id =
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec delete_company_query (now, id)
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let upsert_company_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 string (t2 ptime (t2 string (t2 ptime bool)))))))))))) ->. T.unit)
+  "INSERT INTO companies (id, name, website, industry, address, phone, email, notes, tags, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     name = excluded.name, website = excluded.website, industry = excluded.industry,
+     address = excluded.address, phone = excluded.phone, email = excluded.email,
+     notes = excluded.notes, tags = excluded.tags, sync_modified_at = excluded.sync_modified_at, 
+     sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+
+let upsert_company pool (company : company) =
+  let tags_json = `List (List.map (fun t -> `String t) company.tags) |> Yojson.Safe.to_string in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_company_query (company.id, (company.name, (company.website, (company.industry, (company.address, (company.phone, (company.email, (company.notes, (tags_json, (company.created_at.time, (company.sync.local_id, (company.sync.modified_at.time, company.sync.deleted))))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+(* ============================================
+   DEAL QUERIES
+   ============================================ *)
+
+let deal_of_row (id, (name, (company_id, (contact_id, (stage_str, (value, (currency, (expected_close_date, (notes, (tags_json, created_at)))))))))) =
+  let tags = try Yojson.Safe.from_string tags_json |> Yojson.Safe.Util.to_list |> List.map Yojson.Safe.Util.to_string with _ -> [] in
+  let stage = match Domain.Types.deal_stage_of_string stage_str with Some s -> s | None -> Domain.Types.Lead in
+  {
+    Domain.Types.id;
+    name;
+    company_id;
+    contact_id;
+    stage;
+    value;
+    currency;
+    expected_close_date = Option.map (fun t -> { Domain.Types.time = t; timezone = None }) expected_close_date;
+    notes;
+    tags;
+    created_at = { time = created_at; timezone = None };
+    sync = { local_id = id; version = 1; modified_at = { time = created_at; timezone = None }; synced_at = None; deleted = false };
+  }
+
+let deal_row_type = T.(t2 string (t2 string (t2 (option string) (t2 (option string) (t2 string (t2 (option float) (t2 string (t2 (option ptime) (t2 (option string) (t2 string ptime))))))))))
+
+let list_deals_query = Q.(T.unit ->* deal_row_type)
+  "SELECT id, name, company_id, contact_id, stage, value, currency, expected_close_date, notes, tags, created_at FROM deals WHERE NOT sync_deleted ORDER BY created_at DESC"
+
+let list_deals pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_deals_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map deal_of_row rows)
+  | Error _ -> Lwt.return []
+
+let insert_deal_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 (option string) (t2 string (t2 (option float) (t2 string (t2 (option ptime) (t2 (option string) (t2 string (t2 ptime (t2 string ptime)))))))))))) ->. T.unit)
+  "INSERT INTO deals (id, name, company_id, contact_id, stage, value, currency, expected_close_date, notes, tags, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
+
+let create_deal pool ~name ?company_id ?contact_id ?(stage=Domain.Types.Lead) ?value ?(currency="GBP") ?expected_close_date ?notes ?(tags=[]) () =
+  let id = new_uuid () in
+  let now = now () in
+  let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
+  let stage_str = Domain.Types.deal_stage_to_string stage in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec insert_deal_query (id, (name, (company_id, (contact_id, (stage_str, (value, (currency, (expected_close_date, (notes, (tags_json, (now, (id, now))))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return (Some id)
+  | Error _ -> Lwt.return None
+
+let update_deal_query = Q.(T.(t2 string (t2 (option string) (t2 (option string) (t2 string (t2 (option float) (t2 string (t2 (option ptime) (t2 (option string) (t2 string (t2 ptime string)))))))))) ->. T.unit)
+  "UPDATE deals SET name = ?, company_id = ?, contact_id = ?, stage = ?, value = ?, currency = ?, expected_close_date = ?, notes = ?, tags = ?, sync_modified_at = ? WHERE id = ?"
+
+let update_deal pool ~id ~name ?company_id ?contact_id ~stage ?value ?(currency="GBP") ?expected_close_date ?notes ?(tags=[]) () =
+  let now = now () in
+  let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
+  let stage_str = Domain.Types.deal_stage_to_string stage in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec update_deal_query (name, (company_id, (contact_id, (stage_str, (value, (currency, (expected_close_date, (notes, (tags_json, (now, id))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let delete_deal_query = Q.(T.(t2 ptime string) ->. T.unit)
+  "UPDATE deals SET sync_deleted = TRUE, sync_modified_at = ? WHERE id = ?"
+
+let delete_deal pool ~id =
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec delete_deal_query (now, id)
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let upsert_deal_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 (option string) (t2 string (t2 (option float) (t2 string (t2 (option ptime) (t2 (option string) (t2 string (t2 ptime (t2 string (t2 ptime bool))))))))))))) ->. T.unit)
+  "INSERT INTO deals (id, name, company_id, contact_id, stage, value, currency, expected_close_date, notes, tags, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     name = excluded.name, company_id = excluded.company_id, contact_id = excluded.contact_id,
+     stage = excluded.stage, value = excluded.value, currency = excluded.currency,
+     expected_close_date = excluded.expected_close_date, notes = excluded.notes, tags = excluded.tags,
+     sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+
+let upsert_deal pool (deal : Domain.Types.deal) =
+  let tags_json = `List (List.map (fun t -> `String t) deal.tags) |> Yojson.Safe.to_string in
+  let stage_str = Domain.Types.deal_stage_to_string deal.stage in
+  let close_date = Option.map (fun (ts : Domain.Types.timestamp) -> ts.time) deal.expected_close_date in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_deal_query (deal.id, (deal.name, (deal.company_id, (deal.contact_id, (stage_str, (deal.value, (deal.currency, (close_date, (deal.notes, (tags_json, (deal.created_at.time, (deal.sync.local_id, (deal.sync.modified_at.time, deal.sync.deleted)))))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+(* ============================================
    PROJECT QUERIES
    ============================================ *)
 

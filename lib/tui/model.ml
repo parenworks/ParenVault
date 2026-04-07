@@ -20,6 +20,12 @@ type view =
   | Projects
   | ProjectDetail of uuid
   | ProjectEdit of uuid option  (** None = new project *)
+  | CompanyList
+  | CompanyDetail of uuid
+  | CompanyEdit of uuid option  (** None = new company *)
+  | DealList
+  | DealDetail of uuid
+  | DealEdit of uuid option  (** None = new deal *)
   | Inbox
   | Archive
   | WeeklyReview
@@ -68,6 +74,8 @@ type model = {
   events: event list;
   projects: project list;
   contacts: contact list;
+  companies: company list;
+  deals: deal list;
   
   (* Archived/deleted items *)
   archived_tasks: task list;
@@ -99,7 +107,7 @@ type model = {
   
   (* Search *)
   search_query: string;
-  search_results: [`Task of task | `Note of note | `Event of event | `Contact of contact] list;
+  search_results: [`Task of task | `Note of note | `Event of event | `Contact of contact | `Company of company | `Deal of deal] list;
   
   (* Subtask selection in task detail view *)
   subtask_index: int;
@@ -122,6 +130,8 @@ let init ~device_id =
     events = [];
     projects = [];
     contacts = [];
+    companies = [];
+    deals = [];
     archived_tasks = [];
     archived_notes = [];
     archived_events = [];
@@ -224,6 +234,8 @@ let current_items model =
   | Calendar -> List.length model.events
   | Projects -> List.length model.projects
   | ContactList -> List.length model.contacts
+  | CompanyList -> List.length model.companies
+  | DealList -> List.length model.deals
   | Inbox -> 
     List.filter (fun (t : Domain.Types.task) -> t.status = Domain.Types.Inbox) model.tasks |> List.length
   | Archive ->

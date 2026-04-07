@@ -97,6 +97,47 @@ CREATE TABLE IF NOT EXISTS events (
   sync_deleted INTEGER NOT NULL DEFAULT 0
 );
 
+-- Companies/Organizations
+CREATE TABLE IF NOT EXISTS companies (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  website TEXT,
+  industry TEXT,
+  address TEXT,
+  phone TEXT,
+  email TEXT,
+  notes TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Deals/Opportunities
+CREATE TABLE IF NOT EXISTS deals (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  company_id TEXT,
+  contact_id TEXT,
+  stage TEXT NOT NULL DEFAULT 'lead',
+  value REAL,
+  currency TEXT NOT NULL DEFAULT 'GBP',
+  expected_close_date TEXT,
+  notes TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
 -- Contacts
 CREATE TABLE IF NOT EXISTS contacts (
   id TEXT PRIMARY KEY,
@@ -189,6 +230,9 @@ CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id) WHERE sync_del
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time) WHERE sync_deleted = 0;
 CREATE INDEX IF NOT EXISTS idx_email_refs_message_id ON email_refs(message_id);
 CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(queued_at);
+CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_deals_company ON deals(company_id) WHERE sync_deleted = 0;
 |}
 
 (** PostgreSQL schema (similar but with PostgreSQL-specific types) *)
@@ -267,6 +311,47 @@ CREATE TABLE IF NOT EXISTS events (
   location TEXT,
   tags JSONB NOT NULL DEFAULT '[]',
   recurrence TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Companies/Organizations
+CREATE TABLE IF NOT EXISTS companies (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  website TEXT,
+  industry TEXT,
+  address TEXT,
+  phone TEXT,
+  email TEXT,
+  notes TEXT,
+  tags JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Deals/Opportunities
+CREATE TABLE IF NOT EXISTS deals (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  company_id TEXT,
+  contact_id TEXT,
+  stage TEXT NOT NULL DEFAULT 'lead',
+  value DOUBLE PRECISION,
+  currency TEXT NOT NULL DEFAULT 'GBP',
+  expected_close_date TIMESTAMPTZ,
+  notes TEXT,
+  tags JSONB NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ NOT NULL,
   -- Sync metadata
   sync_local_id TEXT NOT NULL,
@@ -355,6 +440,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id) WHERE NOT sync
 CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id) WHERE NOT sync_deleted;
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time) WHERE NOT sync_deleted;
 CREATE INDEX IF NOT EXISTS idx_email_refs_message_id ON email_refs(message_id);
+CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_deals_company ON deals(company_id) WHERE NOT sync_deleted;
 |}
 
 (** Migration SQL for adding time blocking columns to existing databases *)

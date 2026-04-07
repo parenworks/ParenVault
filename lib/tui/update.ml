@@ -114,6 +114,22 @@ let update model msg =
             previous_views = model.view :: model.previous_views;
           }
         | None -> model)
+     | CompanyList ->
+       (match List.nth_opt model.companies model.selected_index with
+        | Some company ->
+          { model with
+            view = CompanyDetail company.id;
+            previous_views = model.view :: model.previous_views;
+          }
+        | None -> model)
+     | DealList ->
+       (match List.nth_opt model.deals model.selected_index with
+        | Some deal ->
+          { model with
+            view = DealDetail deal.id;
+            previous_views = model.view :: model.previous_views;
+          }
+        | None -> model)
      | _ -> model)
   
   | QuickCapture ->
@@ -276,6 +292,50 @@ let update model msg =
          input_mode = Insert;
          form = Some form;
        }
+     | CompanyList ->
+       let form = {
+         fields = [
+           { name = "Name"; value = ""; field_type = `Text };
+           { name = "Website"; value = ""; field_type = `Text };
+           { name = "Industry"; value = ""; field_type = `Text };
+           { name = "Address"; value = ""; field_type = `Text };
+           { name = "Phone"; value = ""; field_type = `Text };
+           { name = "Email"; value = ""; field_type = `Text };
+           { name = "Notes"; value = ""; field_type = `MultiLine };
+           { name = "Tags"; value = ""; field_type = `Text };
+         ];
+         focused_field = 0;
+         entity_id = None;
+       } in
+       { model with
+         view = CompanyEdit None;
+         previous_views = model.view :: model.previous_views;
+         input_mode = Insert;
+         form = Some form;
+       }
+     | DealList ->
+       let stage_options = ["lead"; "qualified"; "proposal"; "negotiation"; "won"; "lost"] in
+       let form = {
+         fields = [
+           { name = "Name"; value = ""; field_type = `Text };
+           { name = "Stage"; value = "lead"; field_type = `Select stage_options };
+           { name = "Value"; value = ""; field_type = `Text };
+           { name = "Currency"; value = "GBP"; field_type = `Text };
+           { name = "Expected Close"; value = ""; field_type = `Date };
+           { name = "Company"; value = ""; field_type = `Text };
+           { name = "Contact"; value = ""; field_type = `Text };
+           { name = "Notes"; value = ""; field_type = `MultiLine };
+           { name = "Tags"; value = ""; field_type = `Text };
+         ];
+         focused_field = 0;
+         entity_id = None;
+       } in
+       { model with
+         view = DealEdit None;
+         previous_views = model.view :: model.previous_views;
+         input_mode = Insert;
+         form = Some form;
+       }
      | _ -> model)
   
   | EditSelected ->
@@ -372,6 +432,54 @@ let update model msg =
             entity_id = Some id;
           } in
           { model with view = ContactEdit (Some id); input_mode = Insert; form = Some form }
+        | None -> model)
+     | CompanyDetail id ->
+       (match List.find_opt (fun (c : Domain.Types.company) -> c.id = id) model.companies with
+        | Some company ->
+          let form = {
+            fields = [
+              { name = "Name"; value = company.name; field_type = `Text };
+              { name = "Website"; value = Option.value ~default:"" company.website; field_type = `Text };
+              { name = "Industry"; value = Option.value ~default:"" company.industry; field_type = `Text };
+              { name = "Address"; value = Option.value ~default:"" company.address; field_type = `Text };
+              { name = "Phone"; value = Option.value ~default:"" company.phone; field_type = `Text };
+              { name = "Email"; value = Option.value ~default:"" company.email; field_type = `Text };
+              { name = "Notes"; value = Option.value ~default:"" company.notes; field_type = `MultiLine };
+              { name = "Tags"; value = String.concat ", " company.tags; field_type = `Text };
+            ];
+            focused_field = 0;
+            entity_id = Some id;
+          } in
+          { model with view = CompanyEdit (Some id); input_mode = Insert; form = Some form }
+        | None -> model)
+     | DealDetail id ->
+       (match List.find_opt (fun (d : Domain.Types.deal) -> d.id = id) model.deals with
+        | Some deal ->
+          let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+          let close_date_val = match deal.expected_close_date with
+            | Some ts -> 
+              let (y, m, d) = Ptime.to_date ts.Domain.Types.time in
+              Printf.sprintf "%02d-%s-%04d" d months.(m - 1) y
+            | None -> ""
+          in
+          let value_str = match deal.value with Some v -> Printf.sprintf "%.2f" v | None -> "" in
+          let stage_options = ["lead"; "qualified"; "proposal"; "negotiation"; "won"; "lost"] in
+          let form = {
+            fields = [
+              { name = "Name"; value = deal.name; field_type = `Text };
+              { name = "Stage"; value = Domain.Types.deal_stage_to_string deal.stage; field_type = `Select stage_options };
+              { name = "Value"; value = value_str; field_type = `Text };
+              { name = "Currency"; value = deal.currency; field_type = `Text };
+              { name = "Expected Close"; value = close_date_val; field_type = `Date };
+              { name = "Company"; value = Option.value ~default:"" deal.company_id; field_type = `Text };
+              { name = "Contact"; value = Option.value ~default:"" deal.contact_id; field_type = `Text };
+              { name = "Notes"; value = Option.value ~default:"" deal.notes; field_type = `MultiLine };
+              { name = "Tags"; value = String.concat ", " deal.tags; field_type = `Text };
+            ];
+            focused_field = 0;
+            entity_id = Some id;
+          } in
+          { model with view = DealEdit (Some id); input_mode = Insert; form = Some form }
         | None -> model)
      | _ -> model)
   
@@ -547,8 +655,14 @@ let update model msg =
     let contacts = List.map (fun (c : Domain.Types.contact) -> 
       { c with sync = update_sync c.sync }
     ) model.contacts in
-    let status = { text = "✓ Sync complete"; level = `Success; expires_at = None } in
-    { model with tasks; notes; events; contacts; last_sync = Some now; status = Some status }
+    let companies = List.map (fun (c : Domain.Types.company) -> 
+      { c with sync = update_sync c.sync }
+    ) model.companies in
+    let deals = List.map (fun (d : Domain.Types.deal) -> 
+      { d with sync = update_sync d.sync }
+    ) model.deals in
+    let status = { text = "Sync complete"; level = `Success; expires_at = None } in
+    { model with tasks; notes; events; contacts; companies; deals; last_sync = Some now; status = Some status }
   
   (* Status *)
   | ShowStatus status ->
@@ -593,7 +707,19 @@ let update model msg =
       Option.value ~default:"" c.email |> matches_query ||
       Option.value ~default:"" c.phone |> matches_query
     ) model.contacts |> List.map (fun c -> `Contact c) in
-    let results = task_results @ note_results @ event_results @ contact_results in
+    let company_results = List.filter (fun (c : Domain.Types.company) ->
+      matches_query c.name ||
+      Option.value ~default:"" c.website |> matches_query ||
+      Option.value ~default:"" c.industry |> matches_query ||
+      Option.value ~default:"" c.email |> matches_query
+    ) model.companies |> List.map (fun c -> `Company c) in
+    let deal_results = List.filter (fun (d : Domain.Types.deal) ->
+      matches_query d.name ||
+      Option.value ~default:"" d.notes |> matches_query ||
+      List.exists matches_query d.tags ||
+      Domain.Types.deal_stage_to_string d.stage |> matches_query
+    ) model.deals |> List.map (fun d -> `Deal d) in
+    let results = task_results @ note_results @ event_results @ contact_results @ company_results @ deal_results in
     { model with 
       view = Search query;
       search_query = query;
@@ -612,6 +738,10 @@ let update model msg =
        { model with view = EventDetail e.id; input_mode = Normal; previous_views = model.view :: model.previous_views }
      | Some (`Contact (c : Domain.Types.contact)) -> 
        { model with view = ContactDetail c.id; input_mode = Normal; previous_views = model.view :: model.previous_views }
+     | Some (`Company (c : Domain.Types.company)) -> 
+       { model with view = CompanyDetail c.id; input_mode = Normal; previous_views = model.view :: model.previous_views }
+     | Some (`Deal (d : Domain.Types.deal)) -> 
+       { model with view = DealDetail d.id; input_mode = Normal; previous_views = model.view :: model.previous_views }
      | None -> { model with input_mode = Normal })
   
   (* Terminal *)
@@ -657,6 +787,8 @@ let key_to_msg model key =
      | "3" -> Some (Navigate NoteList)
      | "4" -> Some (Navigate Calendar)
      | "5" -> Some (Navigate Projects)
+     | "6" -> Some (Navigate ContactList)
+     | "7" -> Some (Navigate CompanyList)
      | "0" -> Some (Navigate Inbox)
      
      (* Priority shortcuts *)

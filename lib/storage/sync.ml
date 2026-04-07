@@ -147,6 +147,86 @@ let sync_events ~local_pool ~remote_pool =
   
   Lwt.return ()
 
+(** Sync companies between local and remote *)
+let sync_companies ~local_pool ~remote_pool =
+  let* local_companies = Queries.list_companies local_pool in
+  let* remote_companies = Queries.list_companies remote_pool in
+  
+  let local_map = List.fold_left (fun acc (c : Domain.Types.company) -> 
+    (c.id, c) :: acc
+  ) [] local_companies in
+  let remote_map = List.fold_left (fun acc (c : Domain.Types.company) -> 
+    (c.id, c) :: acc
+  ) [] remote_companies in
+  
+  let* () = Lwt_list.iter_s (fun (id, local_company) ->
+    match List.assoc_opt id remote_map with
+    | None ->
+      let* _result = Queries.upsert_company remote_pool local_company in
+      Lwt.return ()
+    | Some remote_company ->
+      if Ptime.is_later local_company.sync.modified_at.time ~than:remote_company.sync.modified_at.time then
+        let* _result = Queries.upsert_company remote_pool local_company in
+        Lwt.return ()
+      else
+        Lwt.return ()
+  ) local_map in
+  
+  let* () = Lwt_list.iter_s (fun (id, remote_company) ->
+    match List.assoc_opt id local_map with
+    | None ->
+      let* _result = Queries.upsert_company local_pool remote_company in
+      Lwt.return ()
+    | Some local_company ->
+      if Ptime.is_later remote_company.sync.modified_at.time ~than:local_company.sync.modified_at.time then
+        let* _result = Queries.upsert_company local_pool remote_company in
+        Lwt.return ()
+      else
+        Lwt.return ()
+  ) remote_map in
+  
+  Lwt.return ()
+
+(** Sync deals between local and remote *)
+let sync_deals ~local_pool ~remote_pool =
+  let* local_deals = Queries.list_deals local_pool in
+  let* remote_deals = Queries.list_deals remote_pool in
+  
+  let local_map = List.fold_left (fun acc (d : Domain.Types.deal) -> 
+    (d.id, d) :: acc
+  ) [] local_deals in
+  let remote_map = List.fold_left (fun acc (d : Domain.Types.deal) -> 
+    (d.id, d) :: acc
+  ) [] remote_deals in
+  
+  let* () = Lwt_list.iter_s (fun (id, local_deal) ->
+    match List.assoc_opt id remote_map with
+    | None ->
+      let* _result = Queries.upsert_deal remote_pool local_deal in
+      Lwt.return ()
+    | Some remote_deal ->
+      if Ptime.is_later local_deal.sync.modified_at.time ~than:remote_deal.sync.modified_at.time then
+        let* _result = Queries.upsert_deal remote_pool local_deal in
+        Lwt.return ()
+      else
+        Lwt.return ()
+  ) local_map in
+  
+  let* () = Lwt_list.iter_s (fun (id, remote_deal) ->
+    match List.assoc_opt id local_map with
+    | None ->
+      let* _result = Queries.upsert_deal local_pool remote_deal in
+      Lwt.return ()
+    | Some local_deal ->
+      if Ptime.is_later remote_deal.sync.modified_at.time ~than:local_deal.sync.modified_at.time then
+        let* _result = Queries.upsert_deal local_pool remote_deal in
+        Lwt.return ()
+      else
+        Lwt.return ()
+  ) remote_map in
+  
+  Lwt.return ()
+
 (** Sync links between local and remote *)
 let sync_links ~local_pool ~remote_pool =
   let* local_links = Queries.list_all_links local_pool in
@@ -192,5 +272,7 @@ let run ~local_pool ~remote_pool =
   let* () = sync_tasks ~local_pool ~remote_pool in
   let* () = sync_notes ~local_pool ~remote_pool in
   let* () = sync_events ~local_pool ~remote_pool in
+  let* () = sync_companies ~local_pool ~remote_pool in
+  let* () = sync_deals ~local_pool ~remote_pool in
   let* () = sync_links ~local_pool ~remote_pool in
   Lwt.return ()

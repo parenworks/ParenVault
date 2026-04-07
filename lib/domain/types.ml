@@ -140,6 +140,49 @@ type contact = {
   sync: sync_meta;
 }
 
+(** A company/organization *)
+type company = {
+  id: uuid;
+  name: string;
+  website: string option;
+  industry: string option;
+  address: string option;
+  phone: string option;
+  email: string option;
+  notes: string option;
+  tags: tag list;
+  created_at: timestamp;
+  sync: sync_meta;
+}
+
+(** Deal/opportunity pipeline stage *)
+type deal_stage = Lead | Qualified | Proposal | Negotiation | Won | Lost
+
+let deal_stage_to_string = function
+  | Lead -> "lead" | Qualified -> "qualified" | Proposal -> "proposal"
+  | Negotiation -> "negotiation" | Won -> "won" | Lost -> "lost"
+
+let deal_stage_of_string = function
+  | "lead" -> Some Lead | "qualified" -> Some Qualified | "proposal" -> Some Proposal
+  | "negotiation" -> Some Negotiation | "won" -> Some Won | "lost" -> Some Lost
+  | _ -> None
+
+(** A deal/opportunity in the pipeline *)
+type deal = {
+  id: uuid;
+  name: string;
+  company_id: uuid option;
+  contact_id: uuid option;
+  stage: deal_stage;
+  value: float option;
+  currency: string;
+  expected_close_date: timestamp option;
+  notes: string option;
+  tags: tag list;
+  created_at: timestamp;
+  sync: sync_meta;
+}
+
 (** Email message reference (for aerc integration) *)
 type email_ref = {
   id: uuid;

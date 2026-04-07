@@ -29,6 +29,14 @@ let render_header model width =
     | ProjectDetail _ -> "Project"
     | ProjectEdit None -> "New Project"
     | ProjectEdit (Some _) -> "Edit Project"
+    | CompanyList -> "Companies"
+    | CompanyDetail _ -> "Company"
+    | CompanyEdit None -> "New Company"
+    | CompanyEdit (Some _) -> "Edit Company"
+    | DealList -> "Deals"
+    | DealDetail _ -> "Deal"
+    | DealEdit None -> "New Deal"
+    | DealEdit (Some _) -> "Edit Deal"
     | Inbox -> "Inbox"
     | Archive -> "Archive"
     | WeeklyReview -> "Weekly Review"
@@ -832,13 +840,15 @@ let render_footer model term_width =
     | Command -> "COMMAND"
   in
   let mode = I.string A.(st bold) (Printf.sprintf "[%s]" mode_str) in
-  let nav_hint = "1:Dash 2:Tasks 3:Notes 4:Cal 5:Proj 6:Contacts 0:Inbox 9:Archive" in
+  let nav_hint = "1:Dash 2:Tasks 3:Notes 4:Cal 5:Proj 6:Contacts 7:Companies 8:Deals 0:Inbox 9:Archive" in
   let help = match model.view with
     | TaskList | Inbox -> "j/k:nav Enter:open n:new c:capture x:done d:del D:daily | " ^ nav_hint
     | Dashboard -> "j/k:nav Enter:open n:new c:capture D:daily | " ^ nav_hint
     | NoteList -> "j/k:nav Enter:open n:new d:del D:daily | " ^ nav_hint
     | Calendar -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | ContactList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
+    | CompanyList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
+    | DealList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | Projects -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | Archive -> "j/k:nav r:restore d:delete Esc:back | " ^ nav_hint
     | WeeklyReview -> "j/k:nav Enter:open x:toggle Esc:back | " ^ nav_hint
@@ -850,8 +860,10 @@ let render_footer model term_width =
     | NoteDetail _ -> "e:edit A:attach L:link o:open E:export d:del Esc:back | " ^ nav_hint
     | EventDetail _ -> "e:edit L:link E:export d:del Esc:back | " ^ nav_hint
     | ContactDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
+    | CompanyDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
+    | DealDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
     | ProjectDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
-    | TaskEdit _ | NoteEdit _ | EventEdit _ | ContactEdit _ | ProjectEdit _ -> "Tab/↓:next ↑:prev Enter:save Esc:cancel"
+    | TaskEdit _ | NoteEdit _ | EventEdit _ | ContactEdit _ | ProjectEdit _ | CompanyEdit _ | DealEdit _ -> "Tab/↓:next ↑:prev Enter:save Esc:cancel"
     | Search _ -> "↑/↓:nav Enter:open Esc:cancel | type to search"
     | LinkPicker _ -> "j/k:nav Enter:link Esc:cancel"
   in
@@ -1312,6 +1324,168 @@ let render model (width, height) =
          let title = if id_opt = None then "New Project" else "Edit Project" in
          render_form ~title form width
        | None -> I.string A.(fg red) "  Form not initialized")
+    | CompanyList ->
+      if List.length model.companies = 0 then
+        I.(void 0 1 <-> string A.(fg (gray 12)) "  No companies. Press 'n' to add one.")
+      else
+        let company_lines = List.mapi (fun i (c : Domain.Types.company) ->
+          let selected = i = model.selected_index in
+          let attr = if selected then A.(fg white ++ bg blue) else A.empty in
+          let industry_str = Option.value ~default:"" c.industry in
+          let website_str = Option.value ~default:"" c.website in
+          let info = if industry_str <> "" then industry_str else website_str in
+          I.hsnap ~align:`Left width (I.string attr (Printf.sprintf "  🏢 %-25s  %s" c.name info))
+        ) model.companies in
+        I.(void 0 1 <-> vcat company_lines)
+    | CompanyDetail id ->
+      (match List.find_opt (fun (c : Domain.Types.company) -> c.id = id) model.companies with
+       | Some company ->
+         let field label value =
+           I.string A.empty ("  " ^ label ^ ": " ^ Option.value ~default:"(none)" value)
+         in
+         let link_lines = if model.current_links = [] then
+           [I.string A.(fg (gray 12)) "    No linked items"]
+         else
+           List.mapi (fun i (link : Domain.Types.link) ->
+             let selected = i = model.link_index in
+             let attr = if selected then A.(fg white ++ bg blue) else A.(fg cyan) in
+             let prefix = if selected then "  > " else "    " in
+             let (other_type, other_id) = 
+               if link.target_id = id then (link.source_type, link.source_id)
+               else (link.target_type, link.target_id)
+             in
+             let name = match other_type with
+               | "task" -> 
+                 (match List.find_opt (fun (t : Domain.Types.task) -> t.id = other_id) model.tasks with
+                  | Some t -> "T " ^ t.title | None -> "T (unknown task)")
+               | "note" ->
+                 (match List.find_opt (fun (n : Domain.Types.note) -> n.id = other_id) model.notes with
+                  | Some n -> "N " ^ n.title | None -> "N (unknown note)")
+               | "contact" ->
+                 (match List.find_opt (fun (c : Domain.Types.contact) -> c.id = other_id) model.contacts with
+                  | Some c -> "C " ^ c.name | None -> "C (unknown contact)")
+               | "project" ->
+                 (match List.find_opt (fun (p : Domain.Types.project) -> p.id = other_id) model.projects with
+                  | Some p -> "P " ^ p.name | None -> "P (unknown project)")
+               | _ -> "? " ^ other_type
+             in
+             I.string attr (prefix ^ name)
+           ) model.current_links
+         in
+         let tags_str = if company.tags = [] then "" else String.concat ", " company.tags in
+         I.(
+           void 0 1 <->
+           string A.(st bold) ("  " ^ company.name) <->
+           void 0 1 <->
+           field "Website" company.website <->
+           field "Industry" company.industry <->
+           field "Address" company.address <->
+           field "Phone" company.phone <->
+           field "Email" company.email <->
+           void 0 1 <->
+           (if tags_str <> "" then string A.(fg yellow) ("  Tags: " ^ tags_str) else empty) <->
+           void 0 1 <->
+           string A.empty ("  " ^ Option.value ~default:"" company.notes) <->
+           void 0 1 <->
+           string A.(st bold ++ fg cyan) "  Links:" <->
+           vcat link_lines
+         )
+       | None -> I.string A.(fg red) "  Company not found")
+    | CompanyEdit id_opt ->
+      (match model.form with
+       | Some form -> 
+         let title = if id_opt = None then "New Company" else "Edit Company" in
+         render_form ~title form width
+       | None -> I.string A.(fg red) "  Form not initialized")
+    | DealList ->
+      if model.deals = [] then
+        I.(void 0 1 <-> string A.(fg (gray 12)) "  No deals yet. Press 'n' to create one.")
+      else
+        let lines = List.mapi (fun i (deal : Domain.Types.deal) ->
+          let selected = i = model.selected_index in
+          let attr = if selected then A.(fg white ++ bg blue) else A.empty in
+          let prefix = if selected then " > " else "   " in
+          let stage_str = Domain.Types.deal_stage_to_string deal.stage in
+          let stage_icon = match deal.stage with
+            | Lead -> "🔵" | Qualified -> "🟡" | Proposal -> "🟠"
+            | Negotiation -> "🟣" | Won -> "🟢" | Lost -> "🔴"
+          in
+          let value_str = match deal.value with
+            | Some v -> Printf.sprintf " %s%.0f" deal.currency v
+            | None -> ""
+          in
+          let company_str = match deal.company_id with
+            | Some cid ->
+              (match List.find_opt (fun (c : Domain.Types.company) -> c.id = cid) model.companies with
+               | Some c -> " @ " ^ c.name
+               | None -> "")
+            | None -> ""
+          in
+          I.string attr (Printf.sprintf "%s%s %s [%s]%s%s" prefix stage_icon deal.name stage_str value_str company_str)
+        ) model.deals in
+        I.(void 0 1 <-> vcat lines)
+    | DealDetail id ->
+      (match List.find_opt (fun (d : Domain.Types.deal) -> d.id = id) model.deals with
+       | Some deal ->
+         let stage_str = Domain.Types.deal_stage_to_string deal.stage in
+         let stage_label = String.capitalize_ascii stage_str in
+         let value_line = match deal.value with
+           | Some v -> I.string A.empty (Printf.sprintf "  Value: %s %.2f" deal.currency v)
+           | None -> I.string A.(fg (gray 12)) "  Value: not set"
+         in
+         let close_line = match deal.expected_close_date with
+           | Some ts ->
+             let (y, m, d) = Ptime.to_date ts.Domain.Types.time in
+             let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+             I.string A.empty (Printf.sprintf "  Expected Close: %02d-%s-%04d" d months.(m - 1) y)
+           | None -> I.string A.(fg (gray 12)) "  Expected Close: not set"
+         in
+         let company_line = match deal.company_id with
+           | Some cid ->
+             (match List.find_opt (fun (c : Domain.Types.company) -> c.id = cid) model.companies with
+              | Some c -> I.string A.empty ("  Company: " ^ c.name)
+              | None -> I.string A.empty ("  Company ID: " ^ cid))
+           | None -> I.string A.(fg (gray 12)) "  Company: none"
+         in
+         let contact_line = match deal.contact_id with
+           | Some cid ->
+             (match List.find_opt (fun (c : Domain.Types.contact) -> c.id = cid) model.contacts with
+              | Some c -> I.string A.empty ("  Contact: " ^ c.name)
+              | None -> I.string A.empty ("  Contact ID: " ^ cid))
+           | None -> I.string A.(fg (gray 12)) "  Contact: none"
+         in
+         let link_lines = if model.current_links = [] then
+           [I.string A.(fg (gray 12)) "    No links"]
+         else
+           List.mapi (fun i (link : Domain.Types.link) ->
+             let selected = i = model.link_index in
+             let attr = if selected then A.(fg white ++ bg blue) else A.(fg cyan) in
+             let (other_type, other_id) = if link.target_id = id then (link.source_type, link.source_id) else (link.target_type, link.target_id) in
+             I.string attr (Printf.sprintf "    [%s] %s (%s)" link.link_type other_id other_type)
+           ) model.current_links
+         in
+         I.(
+           void 0 1 <->
+           string A.(st bold ++ fg white) ("  " ^ deal.name) <->
+           void 0 1 <->
+           string A.empty (Printf.sprintf "  Stage: %s" stage_label) <->
+           value_line <->
+           close_line <->
+           company_line <->
+           contact_line <->
+           void 0 1 <->
+           string A.empty ("  " ^ Option.value ~default:"" deal.notes) <->
+           void 0 1 <->
+           string A.(st bold ++ fg cyan) "  Links:" <->
+           I.vcat link_lines
+         )
+       | None -> I.string A.(fg red) "  Deal not found")
+    | DealEdit id_opt ->
+      (match model.form with
+       | Some form -> 
+         let title = if id_opt = None then "New Deal" else "Edit Deal" in
+         render_form ~title form width
+       | None -> I.string A.(fg red) "  Form not initialized")
     | TaskEdit id_opt ->
       (match model.form with
        | Some form -> 
@@ -1362,6 +1536,8 @@ let render model (width, height) =
           | `Note (n : Domain.Types.note) -> ("📝 ", n.title)
           | `Event (e : Domain.Types.event) -> ("📅 ", e.title)
           | `Contact (c : Domain.Types.contact) -> ("👤 ", c.name)
+          | `Company (c : Domain.Types.company) -> ("🏢 ", c.name)
+          | `Deal (d : Domain.Types.deal) -> ("💰 ", d.name)
         in
         I.string attr (prefix ^ icon ^ title)
       ) model.search_results in
@@ -1375,8 +1551,10 @@ let render model (width, height) =
         List.mapi (fun i (n : Domain.Types.note) -> (i, "note", n.id, "📝 " ^ n.title)) model.notes @
         List.mapi (fun i (p : Domain.Types.project) -> (i + List.length model.notes, "project", p.id, "📁 " ^ p.name)) model.projects @
         List.mapi (fun i (c : Domain.Types.contact) -> (i + List.length model.notes + List.length model.projects, "contact", c.id, "👤 " ^ c.name)) model.contacts @
+        List.mapi (fun i (c : Domain.Types.company) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts, "company", c.id, "🏢 " ^ c.name)) model.companies @
+        List.mapi (fun i (d : Domain.Types.deal) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts + List.length model.companies, "deal", d.id, "💰 " ^ d.name)) model.deals @
         (if source_type <> "task" then 
-          List.mapi (fun i (t : Domain.Types.task) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts, "task", t.id, "📋 " ^ t.title)) model.tasks
+          List.mapi (fun i (t : Domain.Types.task) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts + List.length model.companies + List.length model.deals, "task", t.id, "📋 " ^ t.title)) model.tasks
         else [])
       in
       let item_lines = List.map (fun (i, _typ, _id, title) ->
@@ -1413,7 +1591,7 @@ let handle_key model key =
      | LinkPicker (source_type, _) ->
        (* Navigate linkable items *)
        let num_items = 
-         List.length model.notes + List.length model.projects + List.length model.contacts +
+         List.length model.notes + List.length model.projects + List.length model.contacts + List.length model.companies + List.length model.deals +
          (if source_type <> "task" then List.length model.tasks else 0)
        in
        let new_idx = min (model.selected_index + 1) (num_items - 1) in
@@ -1613,6 +1791,10 @@ let handle_key model key =
        `Continue { model with view = LinkPicker ("contact", id); selected_index = 0; previous_views = model.view :: model.previous_views }
      | ProjectDetail id -> 
        `Continue { model with view = LinkPicker ("project", id); selected_index = 0; previous_views = model.view :: model.previous_views }
+     | CompanyDetail id -> 
+       `Continue { model with view = LinkPicker ("company", id); selected_index = 0; previous_views = model.view :: model.previous_views }
+     | DealDetail id -> 
+       `Continue { model with view = LinkPicker ("deal", id); selected_index = 0; previous_views = model.view :: model.previous_views }
      | _ -> `Continue model)
   | `ASCII 'x' when model.input_mode = Normal -> 
     (match model.view with
@@ -1644,6 +1826,10 @@ let handle_key model key =
     `Continue (update model (Navigate Projects))
   | `ASCII '6' when model.input_mode = Normal -> 
     `Continue (update model (Navigate ContactList))
+  | `ASCII '7' when model.input_mode = Normal -> 
+    `Continue (update model (Navigate CompanyList))
+  | `ASCII '8' when model.input_mode = Normal -> 
+    `Continue (update model (Navigate DealList))
   | `ASCII '0' when model.input_mode = Normal -> 
     `Continue (update model (Navigate Inbox))
   | `ASCII '9' when model.input_mode = Normal -> 
@@ -1817,23 +2003,19 @@ let handle_key model key =
 (** Main application loop *)
 let run ~config () =
   let device_id = config.Config.device_id in
-  (* Try to connect to remote database *)
+  (* Initialize local database first for fast startup *)
   let* db_ctx = 
-    let remote_uri = Config.postgres_uri config in
-    Storage.Db.init ~local_path:config.Config.db.local_path ?remote_uri ()
+    Storage.Db.init ~local_path:config.Config.db.local_path ()
   in
-  let sync_online, pool, remote_pool = match db_ctx with
-    | Ok ctx -> ctx.Storage.Db.remote_available, Some (Storage.Db.local ctx), Storage.Db.remote ctx
-    | Error _ -> false, None, None
+  let pool = match db_ctx with
+    | Ok ctx -> Some (Storage.Db.local ctx)
+    | Error _ -> None
   in
-  (* Run bidirectional sync if both local and remote are available *)
-  let* () = match pool, remote_pool with
-    | Some local_pool, Some remote_pool ->
-      Storage.Sync.run ~local_pool ~remote_pool
-    | _ -> Lwt.return ()
-  in
-  (* Use remote pool if available, otherwise local *)
-  let db_pool = match remote_pool with Some p -> Some p | None -> pool in
+  (* Load from local immediately, connect to remote in background *)
+  let db_pool = pool in
+  (* Remote sync is deferred - user triggers with 's' key to avoid
+     blocking the Lwt event loop with unreachable hosts *)
+  let sync_online = false in
   (* Load initial data from database *)
   let* tasks = match db_pool with
     | Some p -> Storage.Queries.list_tasks p
@@ -1869,6 +2051,16 @@ let run ~config () =
   (* Load contacts *)
   let* contacts = match db_pool with
     | Some p -> Storage.Queries.list_contacts p
+    | None -> Lwt.return []
+  in
+  (* Load companies *)
+  let* companies = match db_pool with
+    | Some p -> Storage.Queries.list_companies p
+    | None -> Lwt.return []
+  in
+  (* Load deals *)
+  let* deals = match db_pool with
+    | Some p -> Storage.Queries.list_deals p
     | None -> Lwt.return []
   in
   (* Helper to get form field value by name *)
@@ -2080,6 +2272,67 @@ let run ~config () =
           | None -> Some { text = "Failed to create project"; level = `Error; expires_at = None }
         in
         Lwt.return { model with projects; view = Projects; previous_views = []; input_mode = Normal; form = None; status }
+    | CompanyEdit None, Some p, Some form ->
+      let name = get_field_value_or form "Name" "" in
+      if name = "" then
+        Lwt.return { model with status = Some { text = "Name is required"; level = `Error; expires_at = None } }
+      else
+        let website = get_field_value form "Website" in
+        let industry = get_field_value form "Industry" in
+        let address = get_field_value form "Address" in
+        let phone = get_field_value form "Phone" in
+        let email = get_field_value form "Email" in
+        let notes = get_field_value form "Notes" in
+        let tags = match get_field_value form "Tags" with
+          | Some s -> String.split_on_char ',' s |> List.map String.trim |> List.filter (fun s -> s <> "")
+          | None -> []
+        in
+        let* result = Storage.Queries.create_company p ~name ?website ?industry ?address ?phone ?email ?notes ~tags () in
+        let* companies = Storage.Queries.list_companies p in
+        let status = match result with
+          | Some _ -> Some { text = "Company created"; level = `Success; expires_at = None }
+          | None -> Some { text = "Failed to create company"; level = `Error; expires_at = None }
+        in
+        Lwt.return { model with companies; view = CompanyList; previous_views = []; input_mode = Normal; form = None; status }
+    | DealEdit None, Some p, Some form ->
+      let name = get_field_value_or form "Name" "" in
+      if name = "" then
+        Lwt.return { model with status = Some { text = "Name is required"; level = `Error; expires_at = None } }
+      else
+        let stage_str = get_field_value_or form "Stage" "lead" in
+        let stage = match Domain.Types.deal_stage_of_string stage_str with Some s -> s | None -> Domain.Types.Lead in
+        let value = match get_field_value form "Value" with
+          | Some s -> (try Some (float_of_string s) with _ -> None)
+          | None -> None
+        in
+        let currency = get_field_value_or form "Currency" "GBP" in
+        let expected_close_date = match get_field_value form "Expected Close" with
+          | Some s ->
+            (try
+              let months = [("JAN",1);("FEB",2);("MAR",3);("APR",4);("MAY",5);("JUN",6);
+                            ("JUL",7);("AUG",8);("SEP",9);("OCT",10);("NOV",11);("DEC",12)] in
+              Scanf.sscanf s "%d-%3s-%d" (fun d m y ->
+                let mo = List.assoc (String.uppercase_ascii m) months in
+                match Ptime.of_date (y, mo, d) with
+                | Some t -> Some t
+                | None -> None)
+            with _ -> None)
+          | None -> None
+        in
+        let company_id = get_field_value form "Company" in
+        let contact_id = get_field_value form "Contact" in
+        let notes = get_field_value form "Notes" in
+        let tags = match get_field_value form "Tags" with
+          | Some s -> String.split_on_char ',' s |> List.map String.trim |> List.filter (fun s -> s <> "")
+          | None -> []
+        in
+        let* result = Storage.Queries.create_deal p ~name ?company_id ?contact_id ~stage ?value ~currency ?expected_close_date ?notes ~tags () in
+        let* deals = Storage.Queries.list_deals p in
+        let status = match result with
+          | Some _ -> Some { text = "Deal created"; level = `Success; expires_at = None }
+          | None -> Some { text = "Failed to create deal"; level = `Error; expires_at = None }
+        in
+        Lwt.return { model with deals; view = DealList; previous_views = []; input_mode = Normal; form = None; status }
     (* Edit existing entities *)
     | TaskEdit (Some id), Some p, Some form ->
       let title = get_field_value_or form "Title" "" in
@@ -2243,6 +2496,61 @@ let run ~config () =
         let* contacts = Storage.Queries.list_contacts p in
         let status = Some { text = "Contact updated"; level = `Success; expires_at = None } in
         Lwt.return { model with contacts; view = ContactDetail id; previous_views = []; input_mode = Normal; form = None; status }
+    | CompanyEdit (Some id), Some p, Some form ->
+      let name = get_field_value_or form "Name" "" in
+      if name = "" then
+        Lwt.return { model with status = Some { text = "Name is required"; level = `Error; expires_at = None } }
+      else
+        let website = get_field_value form "Website" in
+        let industry = get_field_value form "Industry" in
+        let address = get_field_value form "Address" in
+        let phone = get_field_value form "Phone" in
+        let email = get_field_value form "Email" in
+        let notes = get_field_value form "Notes" in
+        let tags = match get_field_value form "Tags" with
+          | Some s -> String.split_on_char ',' s |> List.map String.trim |> List.filter (fun s -> s <> "")
+          | None -> []
+        in
+        let* _result = Storage.Queries.update_company p ~id ~name ?website ?industry ?address ?phone ?email ?notes ~tags () in
+        let* companies = Storage.Queries.list_companies p in
+        let status = Some { text = "Company updated"; level = `Success; expires_at = None } in
+        Lwt.return { model with companies; view = CompanyDetail id; previous_views = []; input_mode = Normal; form = None; status }
+    | DealEdit (Some id), Some p, Some form ->
+      let name = get_field_value_or form "Name" "" in
+      if name = "" then
+        Lwt.return { model with status = Some { text = "Name is required"; level = `Error; expires_at = None } }
+      else
+        let stage_str = get_field_value_or form "Stage" "lead" in
+        let stage = match Domain.Types.deal_stage_of_string stage_str with Some s -> s | None -> Domain.Types.Lead in
+        let value = match get_field_value form "Value" with
+          | Some s -> (try Some (float_of_string s) with _ -> None)
+          | None -> None
+        in
+        let currency = get_field_value_or form "Currency" "GBP" in
+        let expected_close_date = match get_field_value form "Expected Close" with
+          | Some s ->
+            (try
+              let months = [("JAN",1);("FEB",2);("MAR",3);("APR",4);("MAY",5);("JUN",6);
+                            ("JUL",7);("AUG",8);("SEP",9);("OCT",10);("NOV",11);("DEC",12)] in
+              Scanf.sscanf s "%d-%3s-%d" (fun d m y ->
+                let mo = List.assoc (String.uppercase_ascii m) months in
+                match Ptime.of_date (y, mo, d) with
+                | Some t -> Some t
+                | None -> None)
+            with _ -> None)
+          | None -> None
+        in
+        let company_id = get_field_value form "Company" in
+        let contact_id = get_field_value form "Contact" in
+        let notes = get_field_value form "Notes" in
+        let tags = match get_field_value form "Tags" with
+          | Some s -> String.split_on_char ',' s |> List.map String.trim |> List.filter (fun s -> s <> "")
+          | None -> []
+        in
+        let* _result = Storage.Queries.update_deal p ~id ~name ?company_id ?contact_id ~stage ?value ~currency ?expected_close_date ?notes ~tags () in
+        let* deals = Storage.Queries.list_deals p in
+        let status = Some { text = "Deal updated"; level = `Success; expires_at = None } in
+        Lwt.return { model with deals; view = DealDetail id; previous_views = []; input_mode = Normal; form = None; status }
     | _ ->
       Lwt.return (Update.update model SubmitInput)
   in
@@ -2288,6 +2596,24 @@ let run ~config () =
       let* contacts = Storage.Queries.list_contacts p in
       let status = Some { text = "Contact deleted"; level = `Success; expires_at = None } in
       Lwt.return { model with contacts; view = ContactList; previous_views = []; status }
+    | CompanyDetail id, Some p ->
+      let* _result = Storage.Queries.delete_company p ~id in
+      let* companies = Storage.Queries.list_companies p in
+      let status = Some { text = "Company deleted"; level = `Success; expires_at = None } in
+      Lwt.return { model with companies; view = CompanyList; previous_views = []; status }
+    | DealDetail id, Some p ->
+      let* _result = Storage.Queries.delete_deal p ~id in
+      let* deals = Storage.Queries.list_deals p in
+      let status = Some { text = "Deal deleted"; level = `Success; expires_at = None } in
+      Lwt.return { model with deals; view = DealList; previous_views = []; status }
+    | DealList, Some p ->
+      (match List.nth_opt model.deals model.selected_index with
+       | Some deal ->
+         let* _result = Storage.Queries.delete_deal p ~id:deal.id in
+         let* deals = Storage.Queries.list_deals p in
+         let status = Some { text = "Deal deleted"; level = `Success; expires_at = None } in
+         Lwt.return { model with deals; status; selected_index = max 0 (model.selected_index - 1) }
+       | None -> Lwt.return model)
     | (TaskList | Inbox), Some p ->
       (* Delete selected task from list *)
       let tasks_list = match model.view with
@@ -2551,12 +2877,14 @@ let run ~config () =
               List.mapi (fun i (n : Domain.Types.note) -> (i, "note", n.id)) model.notes @
               List.mapi (fun i (pr : Domain.Types.project) -> (i + List.length model.notes, "project", pr.id)) model.projects @
               List.mapi (fun i (c : Domain.Types.contact) -> (i + List.length model.notes + List.length model.projects, "contact", c.id)) model.contacts @
+              List.mapi (fun i (c : Domain.Types.company) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts, "company", c.id)) model.companies @
+              List.mapi (fun i (d : Domain.Types.deal) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts + List.length model.companies, "deal", d.id)) model.deals @
               (if source_type <> "task" then 
-                List.mapi (fun i (t : Domain.Types.task) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts, "task", t.id)) model.tasks
+                List.mapi (fun i (t : Domain.Types.task) -> (i + List.length model.notes + List.length model.projects + List.length model.contacts + List.length model.companies + List.length model.deals, "task", t.id)) model.tasks
               else [])
             in
-            Printf.eprintf "LinkPicker: selected_index=%d, items=%d, notes=%d, projects=%d, contacts=%d\n%!" 
-              model.selected_index (List.length items) (List.length model.notes) (List.length model.projects) (List.length model.contacts);
+            Printf.eprintf "LinkPicker: selected_index=%d, items=%d, notes=%d, projects=%d, contacts=%d, companies=%d\n%!" 
+              model.selected_index (List.length items) (List.length model.notes) (List.length model.projects) (List.length model.contacts) (List.length model.companies);
             (match List.find_opt (fun (i, _, _) -> i = model.selected_index) items with
              | Some (_, target_type, target_id) ->
                let* link_id = Storage.Queries.create_link p ~source_type ~source_id ~target_type ~target_id ~link_type:"related" in
@@ -2752,6 +3080,12 @@ let run ~config () =
              | ProjectDetail id ->
                let* links = Storage.Queries.list_links_for_entity p ~entity_type:"project" ~entity_id:id in
                loop { new_model with current_links = links; link_index = 0 }
+             | CompanyDetail id ->
+               let* links = Storage.Queries.list_links_for_entity p ~entity_type:"company" ~entity_id:id in
+               loop { new_model with current_links = links; link_index = 0 }
+             | DealDetail id ->
+               let* links = Storage.Queries.list_links_for_entity p ~entity_type:"deal" ~entity_id:id in
+               loop { new_model with current_links = links; link_index = 0 }
              | _ -> loop new_model)
           | TaskDetail id, Some p ->
             (* Check if subtask is selected - open it *)
@@ -2801,6 +3135,12 @@ let run ~config () =
                     loop { model with view = EventDetail other_id; previous_views = model.view :: model.previous_views }
                   | "contact" ->
                     loop { model with view = ContactDetail other_id; previous_views = model.view :: model.previous_views }
+                  | "company" ->
+                    let* links = Storage.Queries.list_links_for_entity p ~entity_type:"company" ~entity_id:other_id in
+                    loop { model with view = CompanyDetail other_id; previous_views = model.view :: model.previous_views; current_links = links; link_index = 0 }
+                  | "deal" ->
+                    let* links = Storage.Queries.list_links_for_entity p ~entity_type:"deal" ~entity_id:other_id in
+                    loop { model with view = DealDetail other_id; previous_views = model.view :: model.previous_views; current_links = links; link_index = 0 }
                   | _ -> loop model)
                | None -> loop model)
             else
@@ -2844,6 +3184,38 @@ let run ~config () =
                   loop { model with view = EventDetail other_id; previous_views = model.view :: model.previous_views }
                 | "contact" ->
                   loop { model with view = ContactDetail other_id; previous_views = model.view :: model.previous_views }
+                | "company" ->
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"company" ~entity_id:other_id in
+                  loop { model with view = CompanyDetail other_id; previous_views = model.view :: model.previous_views; current_links = links; link_index = 0 }
+                | _ -> loop model)
+             | None -> loop model)
+          | CompanyDetail id, Some p ->
+            (* Open linked item from company detail *)
+            (match List.nth_opt model.current_links model.link_index with
+             | Some link ->
+               let (other_type, other_id) = 
+                 if link.Domain.Types.target_id = id then (link.source_type, link.source_id)
+                 else (link.target_type, link.target_id)
+               in
+               (match other_type with
+                | "task" ->
+                  let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"task" ~entity_id:other_id in
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"task" ~entity_id:other_id in
+                  let subtasks = List.filter (fun (t : Domain.Types.task) -> t.parent_id = Some other_id) model.tasks in
+                  let att_idx = if subtasks <> [] then -1 else 0 in
+                  loop { model with view = TaskDetail other_id; previous_views = model.view :: model.previous_views; current_attachments = attachments; attachment_index = att_idx; current_links = links; link_index = 0 }
+                | "note" ->
+                  let* attachments = Storage.Queries.list_attachments_for_entity p ~entity_type:"note" ~entity_id:other_id in
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"note" ~entity_id:other_id in
+                  loop { model with view = NoteDetail other_id; previous_views = model.view :: model.previous_views; current_attachments = attachments; attachment_index = 0; current_links = links; link_index = 0 }
+                | "project" ->
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"project" ~entity_id:other_id in
+                  loop { model with view = ProjectDetail other_id; previous_views = model.view :: model.previous_views; current_links = links; link_index = 0 }
+                | "contact" ->
+                  loop { model with view = ContactDetail other_id; previous_views = model.view :: model.previous_views }
+                | "company" ->
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"company" ~entity_id:other_id in
+                  loop { model with view = CompanyDetail other_id; previous_views = model.view :: model.previous_views; current_links = links; link_index = 0 }
                 | _ -> loop model)
              | None -> loop model)
           | _ ->
@@ -2872,6 +3244,12 @@ let run ~config () =
                 | ProjectDetail id ->
                   let* links = Storage.Queries.list_links_for_entity p ~entity_type:"project" ~entity_id:id in
                   loop { model with view = prev; previous_views = rest; selected_index = 0; current_links = links; link_index = 0 }
+                | CompanyDetail id ->
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"company" ~entity_id:id in
+                  loop { model with view = prev; previous_views = rest; selected_index = 0; current_links = links; link_index = 0 }
+                | DealDetail id ->
+                  let* links = Storage.Queries.list_links_for_entity p ~entity_type:"deal" ~entity_id:id in
+                  loop { model with view = prev; previous_views = rest; selected_index = 0; current_links = links; link_index = 0 }
                 | _ ->
                   loop { model with view = prev; previous_views = rest; selected_index = 0 })
              | prev :: rest, None ->
@@ -2887,5 +3265,5 @@ let run ~config () =
       let* () = Term.release term in
       Lwt.return ()
   in
-  let initial_model = { (Model.init ~device_id) with sync_online; width = init_w; height = init_h; tasks; notes; events; projects; contacts; archived_tasks; archived_notes; archived_events } in
+  let initial_model = { (Model.init ~device_id) with sync_online; width = init_w; height = init_h; tasks; notes; events; projects; contacts; companies; deals; archived_tasks; archived_notes; archived_events } in
   loop initial_model

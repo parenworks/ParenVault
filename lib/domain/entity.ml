@@ -132,6 +132,43 @@ let create_contact ~device_id ~name ?email ?phone ?notes ?(tags = []) () : conta
     sync = new_sync_meta ~device_id;
   }
 
+(** Create a new company *)
+let create_company ~device_id ~name ?website ?industry ?address ?phone ?email 
+    ?notes ?(tags = []) () : company =
+  let now = now () in
+  {
+    id = new_uuid ();
+    name;
+    website;
+    industry;
+    address;
+    phone;
+    email;
+    notes;
+    tags;
+    created_at = now;
+    sync = new_sync_meta ~device_id;
+  }
+
+(** Create a new deal *)
+let create_deal ~device_id ~name ?company_id ?contact_id ?(stage = Types.Lead)
+    ?value ?(currency = "GBP") ?expected_close_date ?notes ?(tags = []) () : Types.deal =
+  let now = now () in
+  {
+    id = new_uuid ();
+    name;
+    company_id;
+    contact_id;
+    stage;
+    value;
+    currency;
+    expected_close_date;
+    notes;
+    tags;
+    created_at = now;
+    sync = new_sync_meta ~device_id;
+  }
+
 (** Create an email reference *)
 let create_email_ref ~device_id ~message_id ~subject ~from_addr ~to_addrs 
     ~date ?maildir_path ?linked_task_id ?linked_note_id () : email_ref =
