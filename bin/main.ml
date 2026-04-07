@@ -315,14 +315,65 @@ let import_email_cmd =
     let subject = get "subject" in
     let from = get "from" in
     let date = get "date" in
-    (* Extract body (after blank line) *)
-    let body = 
+    (* Extract body - find text/plain part from MIME or use raw body *)
+    let raw_body = 
       try
         let pos = Str.search_forward (Str.regexp "\n\n\\|\r\n\r\n") content 0 in
         String.sub content (pos + 2) (String.length content - pos - 2)
       with Not_found -> ""
     in
-    let body_preview = if String.length body > 2000 then String.sub body 0 2000 ^ "\n\n[truncated]" else body in
+    (* Strip \r from content *)
+    let strip_cr s = String.split_on_char '\r' s |> String.concat "" in
+    (* Decode base64 string *)
+    let decode_base64 s =
+      try
+        let clean = String.split_on_char '\n' s |> List.map String.trim |> String.concat "" in
+        Base64.decode_exn clean
+      with _ -> s
+    in
+    (* Try to extract text/plain part from MIME multipart *)
+    let body_text =
+      let raw = strip_cr raw_body in
+      (* Look for text/plain content *)
+      let lines = String.split_on_char '\n' raw in
+      let rec find_text_plain in_plain is_base64 acc = function
+        | [] -> 
+          if acc <> [] then
+            let text = String.concat "\n" (List.rev acc) in
+            if is_base64 then decode_base64 text else text
+          else strip_cr raw_body
+        | line :: rest ->
+          if String.length line > 2 && line.[0] = '-' && line.[1] = '-' then begin
+            if in_plain && acc <> [] then
+              let text = String.concat "\n" (List.rev acc) in
+              if is_base64 then decode_base64 text else text
+            else
+              find_text_plain false false [] rest
+          end else if not in_plain then begin
+            let lower = String.lowercase_ascii line in
+            if Str.string_match (Str.regexp ".*content-type:.*text/plain") lower 0 then
+              find_text_plain true is_base64 acc rest
+            else if Str.string_match (Str.regexp ".*content-transfer-encoding:.*base64") lower 0 then
+              find_text_plain in_plain true acc rest
+            else if line = "" && in_plain then
+              find_text_plain true is_base64 acc rest
+            else
+              find_text_plain false is_base64 acc rest
+          end else begin
+            if line = "" && acc = [] then
+              find_text_plain true is_base64 acc rest
+            else
+              find_text_plain true is_base64 (line :: acc) rest
+          end
+      in
+      (* Check if this is a multipart email *)
+      if Str.string_match (Str.regexp ".*--_[0-9]") raw 0 ||
+         Str.string_match (Str.regexp ".*------") raw 0 then
+        find_text_plain false false [] lines
+      else
+        strip_cr raw_body
+    in
+    let body_preview = if String.length body_text > 2000 then String.sub body_text 0 2000 ^ "\n\n[truncated]" else body_text in
     (* Create task or note *)
     if as_note then begin
       let note = Domain.Entity.create_note

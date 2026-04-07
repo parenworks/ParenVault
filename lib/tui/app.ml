@@ -5,6 +5,12 @@ open Notty
 open Notty_lwt
 open Model
 
+(** Sanitize a string for safe Notty rendering - strip all control chars including tabs *)
+let sanitize_for_display s =
+  String.to_seq s
+  |> Seq.map (fun c -> if c < ' ' then ' ' else c)
+  |> String.of_seq
+
 (** Render the header bar *)
 let render_header model width =
   let view_name = match model.view with
@@ -155,11 +161,12 @@ let render_note_line ~selected ~width (note : Domain.Types.note) =
       then ("⟳", A.(fg yellow))  (* Pending *)
       else ("✓", A.(fg green))   (* Synced *)
   in
+  let safe_title = sanitize_for_display note.Domain.Types.title in
   let line = I.(
     string sync_attr sync_char <|>
     string attr prefix <|>
     string attr "📝 " <|>
-    string attr note.Domain.Types.title <|>
+    string attr safe_title <|>
     string A.(fg cyan) tags_str
   ) in
   I.hsnap ~align:`Left width line
@@ -1158,12 +1165,15 @@ let render model (width, height) =
              ) model.current_links in
              I.(void 0 1 <-> string A.(st bold ++ fg cyan) "  🔗 Links: (L:add)" <-> vcat link_lines)
          in
-         let content_lines = String.split_on_char '\n' note.Domain.Types.content
-           |> List.map (fun line -> I.string A.empty ("  " ^ line))
+         let raw_lines = String.split_on_char '\n' note.Domain.Types.content in
+         let content_lines = match raw_lines with
+           | [] -> [I.string A.empty "  "]
+           | lines -> List.map (fun line -> I.string A.empty ("  " ^ sanitize_for_display line)) lines
          in
+         let safe_title = sanitize_for_display note.Domain.Types.title in
          I.(
            void 0 1 <->
-           string A.(st bold) ("  " ^ note.Domain.Types.title) <->
+           string A.(st bold) ("  " ^ safe_title) <->
            void 0 1 <->
            vcat content_lines <->
            attachments_section <->
@@ -2908,7 +2918,10 @@ let run ~config () =
     in
     let (w, h) = Term.size term in
     let model = { model with width = w; height = h } in
-    let img = render model (w, h) in
+    let img = (try render model (w, h) with exn ->
+      Printf.eprintf "RENDER CRASH: %s\n%!" (Printexc.to_string exn);
+      I.string A.(fg red) (Printf.sprintf "Render error: %s" (Printexc.to_string exn))
+    ) in
     let* () = Term.image term img in
     let* event = Lwt_stream.get (Term.events term) in
     match event with
