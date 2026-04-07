@@ -1158,11 +1158,14 @@ let render model (width, height) =
              ) model.current_links in
              I.(void 0 1 <-> string A.(st bold ++ fg cyan) "  🔗 Links: (L:add)" <-> vcat link_lines)
          in
+         let content_lines = String.split_on_char '\n' note.Domain.Types.content
+           |> List.map (fun line -> I.string A.empty ("  " ^ line))
+         in
          I.(
            void 0 1 <->
-           string A.(st bold) note.Domain.Types.title <->
+           string A.(st bold) ("  " ^ note.Domain.Types.title) <->
            void 0 1 <->
-           string A.empty note.Domain.Types.content <->
+           vcat content_lines <->
            attachments_section <->
            links_section
          )
