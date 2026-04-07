@@ -169,6 +169,25 @@ let create_deal ~device_id ~name ?company_id ?contact_id ?(stage = Types.Lead)
     sync = new_sync_meta ~device_id;
   }
 
+(** Create a new activity *)
+let create_activity ~device_id ~kind ~subject ?description ?contact_id
+    ?company_id ?deal_id ?activity_date ?duration_minutes ?(tags = []) () : Types.activity =
+  let now = now () in
+  {
+    id = new_uuid ();
+    kind;
+    subject;
+    description;
+    contact_id;
+    company_id;
+    deal_id;
+    activity_date = (match activity_date with Some d -> d | None -> now);
+    duration_minutes;
+    tags;
+    created_at = now;
+    sync = new_sync_meta ~device_id;
+  }
+
 (** Create an email reference *)
 let create_email_ref ~device_id ~message_id ~subject ~from_addr ~to_addrs 
     ~date ?maildir_path ?linked_task_id ?linked_note_id () : email_ref =

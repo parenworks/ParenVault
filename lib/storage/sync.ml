@@ -227,6 +227,46 @@ let sync_deals ~local_pool ~remote_pool =
   
   Lwt.return ()
 
+(** Sync activities between local and remote *)
+let sync_activities ~local_pool ~remote_pool =
+  let* local_activities = Queries.list_activities local_pool in
+  let* remote_activities = Queries.list_activities remote_pool in
+  
+  let local_map = List.fold_left (fun acc (a : Domain.Types.activity) -> 
+    (a.id, a) :: acc
+  ) [] local_activities in
+  let remote_map = List.fold_left (fun acc (a : Domain.Types.activity) -> 
+    (a.id, a) :: acc
+  ) [] remote_activities in
+  
+  let* () = Lwt_list.iter_s (fun (id, local_activity) ->
+    match List.assoc_opt id remote_map with
+    | None ->
+      let* _result = Queries.upsert_activity remote_pool local_activity in
+      Lwt.return ()
+    | Some remote_activity ->
+      if Ptime.is_later local_activity.sync.modified_at.time ~than:remote_activity.sync.modified_at.time then
+        let* _result = Queries.upsert_activity remote_pool local_activity in
+        Lwt.return ()
+      else
+        Lwt.return ()
+  ) local_map in
+  
+  let* () = Lwt_list.iter_s (fun (id, remote_activity) ->
+    match List.assoc_opt id local_map with
+    | None ->
+      let* _result = Queries.upsert_activity local_pool remote_activity in
+      Lwt.return ()
+    | Some local_activity ->
+      if Ptime.is_later remote_activity.sync.modified_at.time ~than:local_activity.sync.modified_at.time then
+        let* _result = Queries.upsert_activity local_pool remote_activity in
+        Lwt.return ()
+      else
+        Lwt.return ()
+  ) remote_map in
+  
+  Lwt.return ()
+
 (** Sync links between local and remote *)
 let sync_links ~local_pool ~remote_pool =
   let* local_links = Queries.list_all_links local_pool in
@@ -274,5 +314,6 @@ let run ~local_pool ~remote_pool =
   let* () = sync_events ~local_pool ~remote_pool in
   let* () = sync_companies ~local_pool ~remote_pool in
   let* () = sync_deals ~local_pool ~remote_pool in
+  let* () = sync_activities ~local_pool ~remote_pool in
   let* () = sync_links ~local_pool ~remote_pool in
   Lwt.return ()

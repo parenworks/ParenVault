@@ -130,6 +130,14 @@ let update model msg =
             previous_views = model.view :: model.previous_views;
           }
         | None -> model)
+     | ActivityList ->
+       (match List.nth_opt model.activities model.selected_index with
+        | Some act ->
+          { model with
+            view = ActivityDetail act.id;
+            previous_views = model.view :: model.previous_views;
+          }
+        | None -> model)
      | _ -> model)
   
   | QuickCapture ->
@@ -336,6 +344,29 @@ let update model msg =
          input_mode = Insert;
          form = Some form;
        }
+     | ActivityList ->
+       let kind_options = ["call"; "email"; "meeting"; "note"; "follow_up"; "other"] in
+       let form = {
+         fields = [
+           { name = "Subject"; value = ""; field_type = `Text };
+           { name = "Kind"; value = "call"; field_type = `Select kind_options };
+           { name = "Description"; value = ""; field_type = `MultiLine };
+           { name = "Date"; value = ""; field_type = `Date };
+           { name = "Duration (min)"; value = ""; field_type = `Text };
+           { name = "Contact"; value = ""; field_type = `Text };
+           { name = "Company"; value = ""; field_type = `Text };
+           { name = "Deal"; value = ""; field_type = `Text };
+           { name = "Tags"; value = ""; field_type = `Text };
+         ];
+         focused_field = 0;
+         entity_id = None;
+       } in
+       { model with
+         view = ActivityEdit None;
+         previous_views = model.view :: model.previous_views;
+         input_mode = Insert;
+         form = Some form;
+       }
      | _ -> model)
   
   | EditSelected ->
@@ -480,6 +511,33 @@ let update model msg =
             entity_id = Some id;
           } in
           { model with view = DealEdit (Some id); input_mode = Insert; form = Some form }
+        | None -> model)
+     | ActivityDetail id ->
+       (match List.find_opt (fun (a : Domain.Types.activity) -> a.id = id) model.activities with
+        | Some act ->
+          let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+          let date_val =
+            let (y, m, d) = Ptime.to_date act.activity_date.Domain.Types.time in
+            Printf.sprintf "%02d-%s-%04d" d months.(m - 1) y
+          in
+          let dur_str = match act.duration_minutes with Some m -> string_of_int m | None -> "" in
+          let kind_options = ["call"; "email"; "meeting"; "note"; "follow_up"; "other"] in
+          let form = {
+            fields = [
+              { name = "Subject"; value = act.subject; field_type = `Text };
+              { name = "Kind"; value = Domain.Types.activity_kind_to_string act.kind; field_type = `Select kind_options };
+              { name = "Description"; value = Option.value ~default:"" act.description; field_type = `MultiLine };
+              { name = "Date"; value = date_val; field_type = `Date };
+              { name = "Duration (min)"; value = dur_str; field_type = `Text };
+              { name = "Contact"; value = Option.value ~default:"" act.contact_id; field_type = `Text };
+              { name = "Company"; value = Option.value ~default:"" act.company_id; field_type = `Text };
+              { name = "Deal"; value = Option.value ~default:"" act.deal_id; field_type = `Text };
+              { name = "Tags"; value = String.concat ", " act.tags; field_type = `Text };
+            ];
+            focused_field = 0;
+            entity_id = Some id;
+          } in
+          { model with view = ActivityEdit (Some id); input_mode = Insert; form = Some form }
         | None -> model)
      | _ -> model)
   
@@ -661,8 +719,11 @@ let update model msg =
     let deals = List.map (fun (d : Domain.Types.deal) -> 
       { d with sync = update_sync d.sync }
     ) model.deals in
+    let activities = List.map (fun (a : Domain.Types.activity) -> 
+      { a with sync = update_sync a.sync }
+    ) model.activities in
     let status = { text = "Sync complete"; level = `Success; expires_at = None } in
-    { model with tasks; notes; events; contacts; companies; deals; last_sync = Some now; status = Some status }
+    { model with tasks; notes; events; contacts; companies; deals; activities; last_sync = Some now; status = Some status }
   
   (* Status *)
   | ShowStatus status ->
@@ -719,7 +780,13 @@ let update model msg =
       List.exists matches_query d.tags ||
       Domain.Types.deal_stage_to_string d.stage |> matches_query
     ) model.deals |> List.map (fun d -> `Deal d) in
-    let results = task_results @ note_results @ event_results @ contact_results @ company_results @ deal_results in
+    let activity_results = List.filter (fun (a : Domain.Types.activity) ->
+      matches_query a.subject ||
+      Option.value ~default:"" a.description |> matches_query ||
+      List.exists matches_query a.tags ||
+      Domain.Types.activity_kind_to_string a.kind |> matches_query
+    ) model.activities |> List.map (fun a -> `Activity a) in
+    let results = task_results @ note_results @ event_results @ contact_results @ company_results @ deal_results @ activity_results in
     { model with 
       view = Search query;
       search_query = query;
@@ -742,6 +809,8 @@ let update model msg =
        { model with view = CompanyDetail c.id; input_mode = Normal; previous_views = model.view :: model.previous_views }
      | Some (`Deal (d : Domain.Types.deal)) -> 
        { model with view = DealDetail d.id; input_mode = Normal; previous_views = model.view :: model.previous_views }
+     | Some (`Activity (a : Domain.Types.activity)) -> 
+       { model with view = ActivityDetail a.id; input_mode = Normal; previous_views = model.view :: model.previous_views }
      | None -> { model with input_mode = Normal })
   
   (* Terminal *)
@@ -789,6 +858,8 @@ let key_to_msg model key =
      | "5" -> Some (Navigate Projects)
      | "6" -> Some (Navigate ContactList)
      | "7" -> Some (Navigate CompanyList)
+     | "8" -> Some (Navigate DealList)
+     | "9" -> Some (Navigate ActivityList)
      | "0" -> Some (Navigate Inbox)
      
      (* Priority shortcuts *)

@@ -680,6 +680,107 @@ let upsert_deal pool (deal : Domain.Types.deal) =
   | Error _ -> Lwt.return false
 
 (* ============================================
+   ACTIVITY QUERIES
+   ============================================ *)
+
+let activity_of_row (id, (kind_str, (subject, (description, (contact_id, (company_id, (deal_id, (activity_date, (duration_minutes, (tags_json, (created_at, (sync_local_id, (sync_modified_at, (sync_synced_at, sync_deleted)))))))))))))) =
+  let tags = try Yojson.Safe.from_string tags_json |> Yojson.Safe.Util.to_list |> List.map Yojson.Safe.Util.to_string with _ -> [] in
+  let kind = match Domain.Types.activity_kind_of_string kind_str with Some k -> k | None -> Domain.Types.Other in
+  {
+    Domain.Types.id;
+    kind;
+    subject;
+    description;
+    contact_id;
+    company_id;
+    deal_id;
+    activity_date = { time = activity_date; timezone = None };
+    duration_minutes;
+    tags;
+    created_at = { time = created_at; timezone = None };
+    sync = {
+      local_id = sync_local_id;
+      version = 1;
+      modified_at = { time = sync_modified_at; timezone = None };
+      synced_at = Option.map (fun t -> { Domain.Types.time = t; timezone = None }) sync_synced_at;
+      deleted = sync_deleted;
+    };
+  }
+
+let activity_row_type = T.(t2 string (t2 string (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 ptime (t2 (option int) (t2 string (t2 ptime (t2 string (t2 ptime (t2 (option ptime) bool))))))))))))))
+
+let list_activities_query = Q.(T.unit ->* activity_row_type)
+  "SELECT id, kind, subject, description, contact_id, company_id, deal_id, activity_date, duration_minutes, tags, created_at, sync_local_id, sync_modified_at, sync_synced_at, sync_deleted FROM activities WHERE sync_deleted = FALSE ORDER BY activity_date DESC"
+
+let list_activities pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_activities_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map activity_of_row rows)
+  | Error _ -> Lwt.return []
+
+let insert_activity_query = Q.(T.(t2 string (t2 string (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 ptime (t2 (option int) (t2 string (t2 ptime (t2 string ptime)))))))))))) ->. T.unit)
+  "INSERT INTO activities (id, kind, subject, description, contact_id, company_id, deal_id, activity_date, duration_minutes, tags, created_at, sync_local_id, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+
+let create_activity pool ~kind ~subject ?description ?contact_id ?company_id ?deal_id ~activity_date ?duration_minutes ?(tags=[]) () =
+  let id = new_uuid () in
+  let now = now () in
+  let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
+  let kind_str = Domain.Types.activity_kind_to_string kind in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec insert_activity_query (id, (kind_str, (subject, (description, (contact_id, (company_id, (deal_id, (activity_date, (duration_minutes, (tags_json, (now, (id, now))))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return (Some id)
+  | Error _ -> Lwt.return None
+
+let update_activity_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 ptime (t2 (option int) (t2 string (t2 ptime string)))))))))) ->. T.unit)
+  "UPDATE activities SET kind = ?, subject = ?, description = ?, contact_id = ?, company_id = ?, deal_id = ?, activity_date = ?, duration_minutes = ?, tags = ?, sync_modified_at = ? WHERE id = ?"
+
+let update_activity pool ~id ~kind ~subject ?description ?contact_id ?company_id ?deal_id ~activity_date ?duration_minutes ?(tags=[]) () =
+  let now = now () in
+  let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
+  let kind_str = Domain.Types.activity_kind_to_string kind in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec update_activity_query (kind_str, (subject, (description, (contact_id, (company_id, (deal_id, (activity_date, (duration_minutes, (tags_json, (now, id))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let delete_activity_query = Q.(T.(t2 ptime string) ->. T.unit)
+  "UPDATE activities SET sync_deleted = TRUE, sync_modified_at = ? WHERE id = ?"
+
+let delete_activity pool ~id =
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec delete_activity_query (now, id)
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let upsert_activity_query = Q.(T.(t2 string (t2 string (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 ptime (t2 (option int) (t2 string (t2 ptime (t2 string (t2 ptime bool))))))))))))) ->. T.unit)
+  "INSERT INTO activities (id, kind, subject, description, contact_id, company_id, deal_id, activity_date, duration_minutes, tags, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     kind = excluded.kind, subject = excluded.subject, description = excluded.description,
+     contact_id = excluded.contact_id, company_id = excluded.company_id, deal_id = excluded.deal_id,
+     activity_date = excluded.activity_date, duration_minutes = excluded.duration_minutes, tags = excluded.tags,
+     sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+
+let upsert_activity pool (activity : Domain.Types.activity) =
+  let tags_json = `List (List.map (fun t -> `String t) activity.tags) |> Yojson.Safe.to_string in
+  let kind_str = Domain.Types.activity_kind_to_string activity.kind in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_activity_query (activity.id, (kind_str, (activity.subject, (activity.description, (activity.contact_id, (activity.company_id, (activity.deal_id, (activity.activity_date.time, (activity.duration_minutes, (tags_json, (activity.created_at.time, (activity.sync.local_id, (activity.sync.modified_at.time, activity.sync.deleted)))))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+(* ============================================
    PROJECT QUERIES
    ============================================ *)
 

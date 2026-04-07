@@ -183,6 +183,34 @@ type deal = {
   sync: sync_meta;
 }
 
+(** Activity/interaction type *)
+type activity_kind = Call | Email | Meeting | Note | FollowUp | Other
+
+let activity_kind_to_string = function
+  | Call -> "call" | Email -> "email" | Meeting -> "meeting"
+  | Note -> "note" | FollowUp -> "follow_up" | Other -> "other"
+
+let activity_kind_of_string = function
+  | "call" -> Some Call | "email" -> Some Email | "meeting" -> Some Meeting
+  | "note" -> Some Note | "follow_up" -> Some FollowUp | "other" -> Some Other
+  | _ -> None
+
+(** An activity/interaction log entry *)
+type activity = {
+  id: uuid;
+  kind: activity_kind;
+  subject: string;
+  description: string option;
+  contact_id: uuid option;
+  company_id: uuid option;
+  deal_id: uuid option;
+  activity_date: timestamp;
+  duration_minutes: int option;
+  tags: tag list;
+  created_at: timestamp;
+  sync: sync_meta;
+}
+
 (** Email message reference (for aerc integration) *)
 type email_ref = {
   id: uuid;
