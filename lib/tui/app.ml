@@ -873,15 +873,15 @@ let render_footer model term_width =
     | FilterView (Some _) -> "j/k:nav Enter:open x:toggle Esc:back | " ^ nav_hint
     | TemplatePicker _ -> "j/k:nav Enter:create Esc:cancel | " ^ nav_hint
     | ExportPicker -> "j/k:nav Enter:export Esc:cancel | " ^ nav_hint
-    | TaskDetail _ -> "e:edit a:subtask A:attach L:link o:open E:export d:del Esc:back | " ^ nav_hint
+    | TaskDetail _ -> "e:edit t:time a:subtask A:attach L:link o:open E:export d:del Esc:back | " ^ nav_hint
     | NoteDetail _ -> "e:edit A:attach L:link o:open E:export d:del Esc:back | " ^ nav_hint
     | EventDetail _ -> "e:edit L:link E:export d:del Esc:back | " ^ nav_hint
     | ContactDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
-    | CompanyDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
-    | DealDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
+    | CompanyDetail _ -> "e:edit t:time L:link d:del Esc:back | " ^ nav_hint
+    | DealDetail _ -> "e:edit t:time L:link d:del Esc:back | " ^ nav_hint
     | ActivityDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
     | TimeDetail _ -> "e:edit d:del Esc:back | " ^ nav_hint
-    | ProjectDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
+    | ProjectDetail _ -> "e:edit t:time L:link d:del Esc:back | " ^ nav_hint
     | TaskEdit _ | NoteEdit _ | EventEdit _ | ContactEdit _ | ProjectEdit _ | CompanyEdit _ | DealEdit _ | ActivityEdit _ | TimeEdit _ -> "Tab/↓:next ↑:prev Enter:save Esc:cancel"
     | Search _ -> "↑/↓:nav Enter:open Esc:cancel | type to search"
     | LinkPicker _ -> "j/k:nav Enter:link Esc:cancel"
@@ -1004,6 +1004,37 @@ let render_form ~title (form : Model.form_state) term_width =
           (List.concat_map (fun f -> [f; I.void 0 0]) field_lines) @
           [I.void 0 1; footer_line; help_text])
 
+(** Render time entries related to an entity, with totals *)
+let render_time_section (entries : Domain.Types.time_entry list) =
+  let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+  if entries = [] then
+    I.(void 0 1 <-> string A.(fg (gray 12)) "    No time logged (t:log time)")
+  else
+    let total_mins = List.fold_left (fun acc (te : Domain.Types.time_entry) -> acc + te.duration_minutes) 0 entries in
+    let billable_mins = List.fold_left (fun acc (te : Domain.Types.time_entry) ->
+      if te.billable then acc + te.duration_minutes else acc) 0 entries in
+    let total_value = List.fold_left (fun acc (te : Domain.Types.time_entry) ->
+      match te.rate with
+      | Some r when te.billable -> acc +. (r *. float_of_int te.duration_minutes /. 60.0)
+      | _ -> acc) 0.0 entries in
+    let hrs = float_of_int total_mins /. 60.0 in
+    let billable_hrs = float_of_int billable_mins /. 60.0 in
+    let summary = Printf.sprintf "    Total: %.1fh | Billable: %.1fh%s"
+      hrs billable_hrs
+      (if total_value > 0.0 then Printf.sprintf " | Value: %.2f" total_value else "")
+    in
+    let entry_lines = List.map (fun (te : Domain.Types.time_entry) ->
+      let (y, m, d) = Ptime.to_date te.date.Domain.Types.time in
+      let date_str = Printf.sprintf "%02d-%s-%04d" d months.(m - 1) y in
+      let bill_icon = if te.billable then "$" else " " in
+      let dur_str = Printf.sprintf "%.1fh" (float_of_int te.duration_minutes /. 60.0) in
+      I.string A.(fg (gray 14)) (Printf.sprintf "    %s %s %s %s" date_str dur_str bill_icon te.description)
+    ) entries in
+    I.(void 0 1 <->
+       string A.(st bold ++ fg green) "  Time Logged: (t:log time)" <->
+       string A.(fg green) summary <->
+       vcat entry_lines)
+
 (** Main render function *)
 let render model (width, height) =
   let header = render_header model width in
@@ -1111,6 +1142,9 @@ let render model (width, height) =
              ) model.current_links in
              I.(void 0 1 <-> string A.(st bold ++ fg cyan) "  🔗 Links: (L:add)" <-> vcat link_lines)
          in
+         let task_time_entries = List.filter (fun (te : Domain.Types.time_entry) ->
+           te.task_id = Some id) model.time_entries in
+         let time_section = render_time_section task_time_entries in
          I.(
            void 0 1 <->
            string A.(st bold) ("  " ^ task.Domain.Types.title) <->
@@ -1125,6 +1159,7 @@ let render model (width, height) =
            void 0 1 <->
            (if notes_str = "" then string A.(fg (gray 12)) "  (no notes)" else string A.empty ("  " ^ notes_str)) <->
            subtasks_section <->
+           time_section <->
            attachments_section <->
            links_section
          )
@@ -1331,6 +1366,9 @@ let render model (width, height) =
              I.string attr (prefix ^ name)
            ) model.current_links
          in
+         let project_time_entries = List.filter (fun (te : Domain.Types.time_entry) ->
+           te.project_id = Some id) model.time_entries in
+         let time_section = render_time_section project_time_entries in
          I.(
            void 0 1 <->
            string A.(st bold) ("  " ^ project.name) <->
@@ -1338,6 +1376,7 @@ let render model (width, height) =
            string A.empty ("  Status: " ^ status_str) <->
            void 0 1 <->
            string A.empty ("  " ^ Option.value ~default:"" project.description) <->
+           time_section <->
            void 0 1 <->
            string A.(st bold ++ fg cyan) "  🔗 Linked Items:" <->
            vcat link_lines
@@ -1398,6 +1437,9 @@ let render model (width, height) =
            ) model.current_links
          in
          let tags_str = if company.tags = [] then "" else String.concat ", " company.tags in
+         let company_time_entries = List.filter (fun (te : Domain.Types.time_entry) ->
+           te.company_id = Some id) model.time_entries in
+         let time_section = render_time_section company_time_entries in
          I.(
            void 0 1 <->
            string A.(st bold) ("  " ^ company.name) <->
@@ -1411,6 +1453,7 @@ let render model (width, height) =
            (if tags_str <> "" then string A.(fg yellow) ("  Tags: " ^ tags_str) else empty) <->
            void 0 1 <->
            string A.empty ("  " ^ Option.value ~default:"" company.notes) <->
+           time_section <->
            void 0 1 <->
            string A.(st bold ++ fg cyan) "  Links:" <->
            vcat link_lines
@@ -1489,6 +1532,9 @@ let render model (width, height) =
              I.string attr (Printf.sprintf "    [%s] %s (%s)" link.link_type other_id other_type)
            ) model.current_links
          in
+         let deal_time_entries = List.filter (fun (te : Domain.Types.time_entry) ->
+           te.deal_id = Some id) model.time_entries in
+         let time_section = render_time_section deal_time_entries in
          I.(
            void 0 1 <->
            string A.(st bold ++ fg white) ("  " ^ deal.name) <->
@@ -1500,6 +1546,7 @@ let render model (width, height) =
            contact_line <->
            void 0 1 <->
            string A.empty ("  " ^ Option.value ~default:"" deal.notes) <->
+           time_section <->
            void 0 1 <->
            string A.(st bold ++ fg cyan) "  Links:" <->
            I.vcat link_lines
@@ -2058,12 +2105,105 @@ let handle_key model key =
   | `ASCII 'f' when model.input_mode = Normal -> 
     `Continue { model with view = FilterView None; selected_index = 0; previous_views = model.view :: model.previous_views }
   | `ASCII 't' when model.input_mode = Normal ->
-    (* Open template picker based on current view *)
-    let template_type = match model.view with
-      | NoteList | NoteDetail _ -> `Note
-      | _ -> `Task
-    in
-    `Continue { model with view = TemplatePicker template_type; selected_index = 0; previous_views = model.view :: model.previous_views }
+    (match model.view with
+     | TaskDetail id ->
+       (* Create time entry pre-filled with this task *)
+       let task_opt = List.find_opt (fun (t : Domain.Types.task) -> t.id = id) model.tasks in
+       let project_val = match task_opt with
+         | Some t -> Option.value ~default:"" t.project_id
+         | None -> ""
+       in
+       let form = { Model.
+         fields = [
+           { name = "Description"; value = (match task_opt with Some t -> t.title | None -> ""); field_type = `Text };
+           { name = "Date"; value = ""; field_type = `Date };
+           { name = "Duration (min)"; value = "60"; field_type = `Text };
+           { name = "Billable"; value = "Yes"; field_type = `Select ["Yes"; "No"] };
+           { name = "Rate"; value = ""; field_type = `Text };
+           { name = "Currency"; value = "USD"; field_type = `Text };
+           { name = "Project"; value = project_val; field_type = `Text };
+           { name = "Task"; value = id; field_type = `Text };
+           { name = "Company"; value = ""; field_type = `Text };
+           { name = "Contact"; value = ""; field_type = `Text };
+           { name = "Deal"; value = ""; field_type = `Text };
+           { name = "Tags"; value = ""; field_type = `Text };
+         ];
+         focused_field = 0;
+         entity_id = None;
+       } in
+       `Continue { model with view = TimeEdit None; previous_views = model.view :: model.previous_views; input_mode = Insert; form = Some form }
+     | ProjectDetail id ->
+       let form = { Model.
+         fields = [
+           { name = "Description"; value = ""; field_type = `Text };
+           { name = "Date"; value = ""; field_type = `Date };
+           { name = "Duration (min)"; value = "60"; field_type = `Text };
+           { name = "Billable"; value = "Yes"; field_type = `Select ["Yes"; "No"] };
+           { name = "Rate"; value = ""; field_type = `Text };
+           { name = "Currency"; value = "USD"; field_type = `Text };
+           { name = "Project"; value = id; field_type = `Text };
+           { name = "Task"; value = ""; field_type = `Text };
+           { name = "Company"; value = ""; field_type = `Text };
+           { name = "Contact"; value = ""; field_type = `Text };
+           { name = "Deal"; value = ""; field_type = `Text };
+           { name = "Tags"; value = ""; field_type = `Text };
+         ];
+         focused_field = 0;
+         entity_id = None;
+       } in
+       `Continue { model with view = TimeEdit None; previous_views = model.view :: model.previous_views; input_mode = Insert; form = Some form }
+     | CompanyDetail id ->
+       let form = { Model.
+         fields = [
+           { name = "Description"; value = ""; field_type = `Text };
+           { name = "Date"; value = ""; field_type = `Date };
+           { name = "Duration (min)"; value = "60"; field_type = `Text };
+           { name = "Billable"; value = "Yes"; field_type = `Select ["Yes"; "No"] };
+           { name = "Rate"; value = ""; field_type = `Text };
+           { name = "Currency"; value = "USD"; field_type = `Text };
+           { name = "Project"; value = ""; field_type = `Text };
+           { name = "Task"; value = ""; field_type = `Text };
+           { name = "Company"; value = id; field_type = `Text };
+           { name = "Contact"; value = ""; field_type = `Text };
+           { name = "Deal"; value = ""; field_type = `Text };
+           { name = "Tags"; value = ""; field_type = `Text };
+         ];
+         focused_field = 0;
+         entity_id = None;
+       } in
+       `Continue { model with view = TimeEdit None; previous_views = model.view :: model.previous_views; input_mode = Insert; form = Some form }
+     | DealDetail id ->
+       let deal_opt = List.find_opt (fun (d : Domain.Types.deal) -> d.id = id) model.deals in
+       let company_val = match deal_opt with
+         | Some d -> Option.value ~default:"" d.company_id
+         | None -> ""
+       in
+       let form = { Model.
+         fields = [
+           { name = "Description"; value = ""; field_type = `Text };
+           { name = "Date"; value = ""; field_type = `Date };
+           { name = "Duration (min)"; value = "60"; field_type = `Text };
+           { name = "Billable"; value = "Yes"; field_type = `Select ["Yes"; "No"] };
+           { name = "Rate"; value = ""; field_type = `Text };
+           { name = "Currency"; value = "USD"; field_type = `Text };
+           { name = "Project"; value = ""; field_type = `Text };
+           { name = "Task"; value = ""; field_type = `Text };
+           { name = "Company"; value = company_val; field_type = `Text };
+           { name = "Contact"; value = ""; field_type = `Text };
+           { name = "Deal"; value = id; field_type = `Text };
+           { name = "Tags"; value = ""; field_type = `Text };
+         ];
+         focused_field = 0;
+         entity_id = None;
+       } in
+       `Continue { model with view = TimeEdit None; previous_views = model.view :: model.previous_views; input_mode = Insert; form = Some form }
+     | _ ->
+       (* Default: open template picker *)
+       let template_type = match model.view with
+         | NoteList | NoteDetail _ -> `Note
+         | _ -> `Task
+       in
+       `Continue { model with view = TemplatePicker template_type; selected_index = 0; previous_views = model.view :: model.previous_views })
   | `ASCII 'E' when model.input_mode = Normal ->
     (* Export: from detail view exports single item, otherwise opens export picker *)
     (match model.view with
