@@ -511,6 +511,131 @@ let send_cmd =
   let info = Cmd.info "send" ~doc in
   Cmd.v info Term.(const run $ config_file $ item_id $ recipient)
 
+(** Timesheet export command - CSV/JSON *)
+let timesheet_cmd =
+  let config_file =
+    let doc = "Path to configuration file." in
+    Arg.(value & opt string (Config.config_path ()) & info ["c"; "config"] ~docv:"FILE" ~doc)
+  in
+  let format =
+    let doc = "Output format (csv or json)." in
+    Arg.(value & opt string "csv" & info ["f"; "format"] ~docv:"FORMAT" ~doc)
+  in
+  let from_date =
+    let doc = "Start date (YYYY-MM-DD). Defaults to start of current month." in
+    Arg.(value & opt (some string) None & info ["from"] ~docv:"DATE" ~doc)
+  in
+  let to_date =
+    let doc = "End date (YYYY-MM-DD). Defaults to today." in
+    Arg.(value & opt (some string) None & info ["to"] ~docv:"DATE" ~doc)
+  in
+  let billable_only =
+    let doc = "Only include billable entries." in
+    Arg.(value & flag & info ["b"; "billable"] ~doc)
+  in
+  let run config_path format from_date to_date billable_only =
+    let config = init_app config_path in
+    let parse_date_str s =
+      try Scanf.sscanf s "%d-%d-%d" (fun y m d ->
+        Ptime.of_date (y, m, d))
+      with _ -> None
+    in
+    let now = Ptime_clock.now () in
+    let (cur_y, cur_m, _) = Ptime.to_date now in
+    let from_ptime = match from_date with
+      | Some s -> (match parse_date_str s with Some t -> t | None -> 
+        Printf.eprintf "Invalid from date: %s (expected YYYY-MM-DD)\n" s;
+        match Ptime.of_date (cur_y, cur_m, 1) with Some t -> t | None -> now)
+      | None -> (match Ptime.of_date (cur_y, cur_m, 1) with Some t -> t | None -> now)
+    in
+    let to_ptime = match to_date with
+      | Some s -> (match parse_date_str s with Some t -> t | None ->
+        Printf.eprintf "Invalid to date: %s (expected YYYY-MM-DD)\n" s; now)
+      | None -> now
+    in
+    Lwt_main.run (
+      let open Lwt.Syntax in
+      let* db_result = Storage.Db.init ~local_path:config.db.local_path () in
+      match db_result with
+      | Ok ctx ->
+        let pool = Storage.Db.local ctx in
+        let* entries = Storage.Queries.list_time_entries_range pool ~from_date:from_ptime ~to_date:to_ptime in
+        let entries = if billable_only then
+          List.filter (fun (te : Domain.Types.time_entry) -> te.billable) entries
+        else entries in
+        let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+        if format = "json" then begin
+          Printf.printf "[\n";
+          let len = List.length entries in
+          List.iteri (fun i (te : Domain.Types.time_entry) ->
+            let (y, m, d) = Ptime.to_date te.date.Domain.Types.time in
+            let date_str = Printf.sprintf "%04d-%02d-%02d" y m d in
+            let hrs = float_of_int te.duration_minutes /. 60.0 in
+            let rate_str = match te.rate with Some r -> Printf.sprintf "%.2f" r | None -> "null" in
+            let total_str = match te.rate with Some r -> Printf.sprintf "%.2f" (r *. hrs) | None -> "null" in
+            let tags_str = String.concat "\", \"" te.tags in
+            let tags_json = if te.tags = [] then "[]" else Printf.sprintf "[\"%s\"]" tags_str in
+            let comma = if i < len - 1 then "," else "" in
+            Printf.printf "  {\"date\": \"%s\", \"description\": \"%s\", \"duration_minutes\": %d, \"hours\": %.2f, \"billable\": %s, \"rate\": %s, \"currency\": \"%s\", \"total\": %s, \"tags\": %s}%s\n"
+              date_str
+              (String.escaped te.description)
+              te.duration_minutes
+              hrs
+              (if te.billable then "true" else "false")
+              rate_str
+              te.currency
+              total_str
+              tags_json
+              comma
+          ) entries;
+          Printf.printf "]\n"
+        end else begin
+          Printf.printf "Date,Description,Duration (min),Hours,Billable,Rate,Currency,Total,Tags\n";
+          List.iter (fun (te : Domain.Types.time_entry) ->
+            let (y, m, d) = Ptime.to_date te.date.Domain.Types.time in
+            let date_str = Printf.sprintf "%02d-%s-%04d" d months.(m - 1) y in
+            let hrs = float_of_int te.duration_minutes /. 60.0 in
+            let rate_str = match te.rate with Some r -> Printf.sprintf "%.2f" r | None -> "" in
+            let total_str = match te.rate with Some r -> Printf.sprintf "%.2f" (r *. hrs) | None -> "" in
+            let tags_str = String.concat "; " te.tags in
+            let desc_escaped = if String.contains te.description ',' then
+              Printf.sprintf "\"%s\"" (String.escaped te.description)
+            else te.description in
+            Printf.printf "%s,%s,%d,%.2f,%s,%s,%s,%s,%s\n"
+              date_str
+              desc_escaped
+              te.duration_minutes
+              hrs
+              (if te.billable then "Yes" else "No")
+              rate_str
+              te.currency
+              total_str
+              tags_str
+          ) entries
+        end;
+        let total_mins = List.fold_left (fun acc (te : Domain.Types.time_entry) -> acc + te.duration_minutes) 0 entries in
+        let billable_mins = List.fold_left (fun acc (te : Domain.Types.time_entry) ->
+          if te.billable then acc + te.duration_minutes else acc) 0 entries in
+        let total_value = List.fold_left (fun acc (te : Domain.Types.time_entry) ->
+          match te.rate with
+          | Some r when te.billable -> acc +. (r *. float_of_int te.duration_minutes /. 60.0)
+          | _ -> acc) 0.0 entries in
+        Printf.eprintf "\n--- Summary ---\n";
+        Printf.eprintf "Entries: %d\n" (List.length entries);
+        Printf.eprintf "Total: %.1f hrs (%d min)\n" (float_of_int total_mins /. 60.0) total_mins;
+        Printf.eprintf "Billable: %.1f hrs (%d min)\n" (float_of_int billable_mins /. 60.0) billable_mins;
+        if total_value > 0.0 then
+          Printf.eprintf "Value: %.2f\n" total_value;
+        Lwt.return ()
+      | Error msg ->
+        Printf.eprintf "Failed to connect to database: %s\n" msg;
+        Lwt.return ()
+    )
+  in
+  let doc = "Export timesheet as CSV or JSON. Use --from/--to for date range, -b for billable only, -f json for JSON output. Pipe to file: pv timesheet --from 2026-01-01 > timesheet.csv" in
+  let info = Cmd.info "timesheet" ~doc in
+  Cmd.v info Term.(const run $ config_file $ format $ from_date $ to_date $ billable_only)
+
 (** Main command group *)
 let main_cmd =
   let doc = "Personal Knowledge Management TUI with offline-first sync" in
@@ -521,6 +646,6 @@ let main_cmd =
     in
     Term.(const (fun config_path -> let config = init_app config_path in run_tui config) $ config_file)
   in
-  Cmd.group info ~default:default_run [tui_cmd; sync_cmd; add_cmd; list_cmd; init_cmd; install_cmd; import_email_cmd; send_cmd]
+  Cmd.group info ~default:default_run [tui_cmd; sync_cmd; add_cmd; list_cmd; init_cmd; install_cmd; import_email_cmd; send_cmd; timesheet_cmd]
 
 let () = exit (Cmd.eval main_cmd)

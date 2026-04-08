@@ -979,6 +979,99 @@ let upsert_link_query = Q.(T.(t2 string (t2 string (t2 string (t2 string (t2 str
      link_type = excluded.link_type, sync_modified_at = excluded.sync_modified_at, 
      sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
 
+(* ---- Time Entries ---- *)
+
+let time_entry_of_row (id, (description, (date, (start_time, (end_time, (duration_minutes, (billable, (rate, (currency, (project_id, (task_id, (deal_id, (company_id, (contact_id, (tags_json, (created_at, (sync_local_id, (sync_modified_at, (sync_synced_at, sync_deleted))))))))))))))))))) =
+  let tags = try Yojson.Safe.from_string tags_json |> Yojson.Safe.Util.to_list |> List.map Yojson.Safe.Util.to_string with _ -> [] in
+  {
+    Domain.Types.id;
+    description;
+    date = { time = date; timezone = None };
+    start_time = Option.map (fun t -> { Domain.Types.time = t; timezone = None }) start_time;
+    end_time = Option.map (fun t -> { Domain.Types.time = t; timezone = None }) end_time;
+    duration_minutes;
+    billable;
+    rate;
+    currency;
+    project_id;
+    task_id;
+    deal_id;
+    company_id;
+    contact_id;
+    tags;
+    created_at = { time = created_at; timezone = None };
+    sync = {
+      local_id = sync_local_id;
+      version = 1;
+      modified_at = { time = sync_modified_at; timezone = None };
+      synced_at = Option.map (fun t -> { Domain.Types.time = t; timezone = None }) sync_synced_at;
+      deleted = sync_deleted;
+    };
+  }
+
+let time_entry_row_type = T.(t2 string (t2 string (t2 ptime (t2 (option ptime) (t2 (option ptime) (t2 int (t2 bool (t2 (option float) (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 string (t2 ptime (t2 string (t2 ptime (t2 (option ptime) bool)))))))))))))))))))
+
+let list_time_entries_query = Q.(T.unit ->* time_entry_row_type)
+  "SELECT id, description, date, start_time, end_time, duration_minutes, billable, rate, currency, project_id, task_id, deal_id, company_id, contact_id, tags, created_at, sync_local_id, sync_modified_at, sync_synced_at, sync_deleted FROM time_entries WHERE sync_deleted = FALSE ORDER BY date DESC"
+
+let list_time_entries pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_time_entries_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map time_entry_of_row rows)
+  | Error _ -> Lwt.return []
+
+let insert_time_entry_query = Q.(T.(t2 string (t2 string (t2 ptime (t2 (option ptime) (t2 (option ptime) (t2 int (t2 bool (t2 (option float) (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 string (t2 ptime (t2 string ptime))))))))))))))))) ->. T.unit)
+  "INSERT INTO time_entries (id, description, date, start_time, end_time, duration_minutes, billable, rate, currency, project_id, task_id, deal_id, company_id, contact_id, tags, created_at, sync_local_id, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+
+let create_time_entry pool ~description ~date ?start_time ?end_time ~duration_minutes ?(billable=true) ?rate ?(currency="USD") ?project_id ?task_id ?deal_id ?company_id ?contact_id ?(tags=[]) () =
+  let id = new_uuid () in
+  let now = now () in
+  let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec insert_time_entry_query (id, (description, (date, (start_time, (end_time, (duration_minutes, (billable, (rate, (currency, (project_id, (task_id, (deal_id, (company_id, (contact_id, (tags_json, (now, (id, now)))))))))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return (Some id)
+  | Error _ -> Lwt.return None
+
+let update_time_entry_query = Q.(T.(t2 string (t2 ptime (t2 (option ptime) (t2 (option ptime) (t2 int (t2 bool (t2 (option float) (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 string (t2 ptime string))))))))))))))) ->. T.unit)
+  "UPDATE time_entries SET description = ?, date = ?, start_time = ?, end_time = ?, duration_minutes = ?, billable = ?, rate = ?, currency = ?, project_id = ?, task_id = ?, deal_id = ?, company_id = ?, contact_id = ?, tags = ?, sync_modified_at = ? WHERE id = ?"
+
+let update_time_entry pool ~id ~description ~date ?start_time ?end_time ~duration_minutes ?(billable=true) ?rate ?(currency="USD") ?project_id ?task_id ?deal_id ?company_id ?contact_id ?(tags=[]) () =
+  let now = now () in
+  let tags_json = `List (List.map (fun t -> `String t) tags) |> Yojson.Safe.to_string in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec update_time_entry_query (description, (date, (start_time, (end_time, (duration_minutes, (billable, (rate, (currency, (project_id, (task_id, (deal_id, (company_id, (contact_id, (tags_json, (now, id)))))))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let delete_time_entry_query = Q.(T.(t2 ptime string) ->. T.unit)
+  "UPDATE time_entries SET sync_deleted = TRUE, sync_modified_at = ? WHERE id = ?"
+
+let delete_time_entry pool ~id =
+  let now = now () in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec delete_time_entry_query (now, id)
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error _ -> Lwt.return false
+
+let list_time_entries_range_query = Q.(T.(t2 ptime ptime) ->* time_entry_row_type)
+  "SELECT id, description, date, start_time, end_time, duration_minutes, billable, rate, currency, project_id, task_id, deal_id, company_id, contact_id, tags, created_at, sync_local_id, sync_modified_at, sync_synced_at, sync_deleted FROM time_entries WHERE sync_deleted = FALSE AND date >= ? AND date <= ? ORDER BY date DESC"
+
+let list_time_entries_range pool ~from_date ~to_date =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_time_entries_range_query (from_date, to_date)
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map time_entry_of_row rows)
+  | Error _ -> Lwt.return []
+
 let upsert_link pool (link : Domain.Types.link) =
   let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
     C.exec upsert_link_query (link.id, (link.source_type, (link.source_id, (link.target_type, (link.target_id, (link.link_type, (link.created_at.time, (link.sync.local_id, (link.sync.modified_at.time, link.sync.deleted)))))))))

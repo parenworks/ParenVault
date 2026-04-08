@@ -47,6 +47,10 @@ let render_header model width =
     | ActivityDetail _ -> "Activity"
     | ActivityEdit None -> "New Activity"
     | ActivityEdit (Some _) -> "Edit Activity"
+    | TimeList -> "Time Entries"
+    | TimeDetail _ -> "Time Entry"
+    | TimeEdit None -> "New Time Entry"
+    | TimeEdit (Some _) -> "Edit Time Entry"
     | Inbox -> "Inbox"
     | Archive -> "Archive"
     | WeeklyReview -> "Weekly Review"
@@ -851,7 +855,7 @@ let render_footer model term_width =
     | Command -> "COMMAND"
   in
   let mode = I.string A.(st bold) (Printf.sprintf "[%s]" mode_str) in
-  let nav_hint = "1:Dash 2:Tasks 3:Notes 4:Cal 5:Proj 6:Contacts 7:Companies 8:Deals 9:Activity 0:Inbox A:Archive" in
+  let nav_hint = "1:Dash 2:Tasks 3:Notes 4:Cal 5:Proj 6:Contacts 7:Companies 8:Deals 9:Activity 0:Inbox A:Archive T:Time" in
   let help = match model.view with
     | TaskList | Inbox -> "j/k:nav Enter:open n:new c:capture x:done d:del D:daily | " ^ nav_hint
     | Dashboard -> "j/k:nav Enter:open n:new c:capture D:daily | " ^ nav_hint
@@ -861,6 +865,7 @@ let render_footer model term_width =
     | CompanyList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | DealList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | ActivityList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
+    | TimeList -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | Projects -> "j/k:nav Enter:open n:new d:del | " ^ nav_hint
     | Archive -> "j/k:nav r:restore d:delete Esc:back | " ^ nav_hint
     | WeeklyReview -> "j/k:nav Enter:open x:toggle Esc:back | " ^ nav_hint
@@ -875,8 +880,9 @@ let render_footer model term_width =
     | CompanyDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
     | DealDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
     | ActivityDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
+    | TimeDetail _ -> "e:edit d:del Esc:back | " ^ nav_hint
     | ProjectDetail _ -> "e:edit L:link d:del Esc:back | " ^ nav_hint
-    | TaskEdit _ | NoteEdit _ | EventEdit _ | ContactEdit _ | ProjectEdit _ | CompanyEdit _ | DealEdit _ | ActivityEdit _ -> "Tab/↓:next ↑:prev Enter:save Esc:cancel"
+    | TaskEdit _ | NoteEdit _ | EventEdit _ | ContactEdit _ | ProjectEdit _ | CompanyEdit _ | DealEdit _ | ActivityEdit _ | TimeEdit _ -> "Tab/↓:next ↑:prev Enter:save Esc:cancel"
     | Search _ -> "↑/↓:nav Enter:open Esc:cancel | type to search"
     | LinkPicker _ -> "j/k:nav Enter:link Esc:cancel"
   in
@@ -1593,6 +1599,106 @@ let render model (width, height) =
          let title = if id_opt = None then "New Activity" else "Edit Activity" in
          render_form ~title form width
        | None -> I.string A.(fg red) "  Form not initialized")
+    | TimeList ->
+      let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+      let total_mins = List.fold_left (fun acc (te : Domain.Types.time_entry) ->
+        if te.billable then acc + te.duration_minutes else acc
+      ) 0 model.time_entries in
+      let total_hrs = float_of_int total_mins /. 60.0 in
+      let summary = I.string A.(fg cyan ++ st bold) (Printf.sprintf "  Billable: %.1f hrs | %d entries" total_hrs (List.length model.time_entries)) in
+      let lines = List.mapi (fun i (te : Domain.Types.time_entry) ->
+        let selected = i = model.selected_index in
+        let attr = if selected then A.(fg white ++ bg blue ++ st bold) else A.empty in
+        let prefix = if selected then "> " else "  " in
+        let (y, m, d) = Ptime.to_date te.date.Domain.Types.time in
+        let date_str = Printf.sprintf "%02d-%s-%04d" d months.(m - 1) y in
+        let hrs = float_of_int te.duration_minutes /. 60.0 in
+        let billable_icon = if te.billable then "$" else " " in
+        let project_str = match te.project_id with
+          | Some pid ->
+            (match List.find_opt (fun (p : Domain.Types.project) -> p.id = pid) model.projects with
+             | Some p -> " [" ^ p.name ^ "]"
+             | None -> "")
+          | None -> ""
+        in
+        I.string attr (Printf.sprintf "%s%s %s %.1fh %s%s" prefix billable_icon date_str hrs (sanitize_for_display te.description) project_str)
+      ) model.time_entries in
+      I.(void 0 1 <-> summary <-> void 0 1 <-> vcat lines)
+    | TimeDetail id ->
+      (match List.find_opt (fun (te : Domain.Types.time_entry) -> te.id = id) model.time_entries with
+       | Some te ->
+         let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+         let (y, m, d) = Ptime.to_date te.date.Domain.Types.time in
+         let date_str = Printf.sprintf "%02d-%s-%04d" d months.(m - 1) y in
+         let hrs = float_of_int te.duration_minutes /. 60.0 in
+         let billable_str = if te.billable then "Yes" else "No" in
+         let rate_line = match te.rate with
+           | Some r -> I.string A.empty (Printf.sprintf "  Rate: %.2f %s/hr" r te.currency)
+           | None -> I.string A.(fg (gray 12)) "  Rate: not set"
+         in
+         let project_line = match te.project_id with
+           | Some pid ->
+             (match List.find_opt (fun (p : Domain.Types.project) -> p.id = pid) model.projects with
+              | Some p -> I.string A.empty ("  Project: " ^ p.name)
+              | None -> I.string A.empty ("  Project ID: " ^ pid))
+           | None -> I.string A.(fg (gray 12)) "  Project: none"
+         in
+         let task_line = match te.task_id with
+           | Some tid ->
+             (match List.find_opt (fun (t : Domain.Types.task) -> t.id = tid) model.tasks with
+              | Some t -> I.string A.empty ("  Task: " ^ t.title)
+              | None -> I.string A.empty ("  Task ID: " ^ tid))
+           | None -> I.string A.(fg (gray 12)) "  Task: none"
+         in
+         let company_line = match te.company_id with
+           | Some cid ->
+             (match List.find_opt (fun (c : Domain.Types.company) -> c.id = cid) model.companies with
+              | Some c -> I.string A.empty ("  Company: " ^ c.name)
+              | None -> I.string A.empty ("  Company ID: " ^ cid))
+           | None -> I.string A.(fg (gray 12)) "  Company: none"
+         in
+         let contact_line = match te.contact_id with
+           | Some cid ->
+             (match List.find_opt (fun (c : Domain.Types.contact) -> c.id = cid) model.contacts with
+              | Some c -> I.string A.empty ("  Contact: " ^ c.name)
+              | None -> I.string A.empty ("  Contact ID: " ^ cid))
+           | None -> I.string A.(fg (gray 12)) "  Contact: none"
+         in
+         let total_line = match te.rate with
+           | Some r -> 
+             let total = r *. hrs in
+             I.string A.(fg green ++ st bold) (Printf.sprintf "  Total: %.2f %s" total te.currency)
+           | None -> I.empty
+         in
+         let tags_line = match te.tags with
+           | [] -> I.string A.(fg (gray 12)) "  Tags: none"
+           | ts -> I.string A.(fg green) ("  Tags: #" ^ String.concat " #" ts)
+         in
+         I.(
+           void 0 1 <->
+           string A.(st bold ++ fg white) ("  " ^ sanitize_for_display te.description) <->
+           void 0 1 <->
+           string A.empty (Printf.sprintf "  Date: %s" date_str) <->
+           string A.empty (Printf.sprintf "  Duration: %.1f hrs (%d min)" hrs te.duration_minutes) <->
+           string A.empty (Printf.sprintf "  Billable: %s" billable_str) <->
+           rate_line <->
+           total_line <->
+           string A.empty (Printf.sprintf "  Currency: %s" te.currency) <->
+           void 0 1 <->
+           project_line <->
+           task_line <->
+           company_line <->
+           contact_line <->
+           void 0 1 <->
+           tags_line
+         )
+       | None -> I.string A.(fg red) "  Time entry not found")
+    | TimeEdit id_opt ->
+      (match model.form with
+       | Some form -> 
+         let title = if id_opt = None then "New Time Entry" else "Edit Time Entry" in
+         render_form ~title form width
+       | None -> I.string A.(fg red) "  Form not initialized")
     | TaskEdit id_opt ->
       (match model.form with
        | Some form -> 
@@ -1945,6 +2051,8 @@ let handle_key model key =
     `Continue (update model (Navigate Inbox))
   | `ASCII '9' when model.input_mode = Normal -> 
     `Continue (update model (Navigate ActivityList))
+  | `ASCII 'T' when model.input_mode = Normal -> 
+    `Continue (update model (Navigate TimeList))
   | `ASCII 'w' when model.input_mode = Normal -> 
     `Continue { model with view = WeeklyReview; selected_index = 0; previous_views = model.view :: model.previous_views }
   | `ASCII 'f' when model.input_mode = Normal -> 
@@ -2177,6 +2285,11 @@ let run ~config () =
   (* Load activities *)
   let* activities = match db_pool with
     | Some p -> Storage.Queries.list_activities p
+    | None -> Lwt.return []
+  in
+  (* Load time entries *)
+  let* time_entries = match db_pool with
+    | Some p -> Storage.Queries.list_time_entries p
     | None -> Lwt.return []
   in
   (* Helper to get form field value by name *)
@@ -2488,6 +2601,52 @@ let run ~config () =
           | None -> Some { text = "Failed to create activity"; level = `Error; expires_at = None }
         in
         Lwt.return { model with activities; view = ActivityList; previous_views = []; input_mode = Normal; form = None; status }
+    | TimeEdit None, Some p, Some form ->
+      let description = get_field_value_or form "Description" "" in
+      if description = "" then
+        Lwt.return { model with status = Some { text = "Description is required"; level = `Error; expires_at = None } }
+      else
+        let date = match get_field_value form "Date" with
+          | Some s ->
+            (try
+              let months = [("JAN",1);("FEB",2);("MAR",3);("APR",4);("MAY",5);("JUN",6);
+                            ("JUL",7);("AUG",8);("SEP",9);("OCT",10);("NOV",11);("DEC",12)] in
+              Scanf.sscanf s "%d-%3s-%d" (fun d m y ->
+                let mo = List.assoc (String.uppercase_ascii m) months in
+                match Ptime.of_date (y, mo, d) with
+                | Some t -> t
+                | None -> Ptime_clock.now ())
+            with _ -> Ptime_clock.now ())
+          | None -> Ptime_clock.now ()
+        in
+        let duration_minutes = match get_field_value form "Duration (min)" with
+          | Some s -> (try int_of_string s with _ -> 60)
+          | None -> 60
+        in
+        let billable = match get_field_value form "Billable" with
+          | Some "No" -> false | _ -> true
+        in
+        let rate = match get_field_value form "Rate" with
+          | Some s -> (try Some (float_of_string s) with _ -> None)
+          | None -> None
+        in
+        let currency = get_field_value_or form "Currency" "USD" in
+        let project_id = get_field_value form "Project" in
+        let task_id = get_field_value form "Task" in
+        let company_id = get_field_value form "Company" in
+        let contact_id = get_field_value form "Contact" in
+        let deal_id = get_field_value form "Deal" in
+        let tags = match get_field_value form "Tags" with
+          | Some s -> String.split_on_char ',' s |> List.map String.trim |> List.filter (fun s -> s <> "")
+          | None -> []
+        in
+        let* result = Storage.Queries.create_time_entry p ~description ~date ?rate ~currency ~duration_minutes ~billable ?project_id ?task_id ?company_id ?contact_id ?deal_id ~tags () in
+        let* time_entries = Storage.Queries.list_time_entries p in
+        let status = match result with
+          | Some _ -> Some { text = "Time entry created"; level = `Success; expires_at = None }
+          | None -> Some { text = "Failed to create time entry"; level = `Error; expires_at = None }
+        in
+        Lwt.return { model with time_entries; view = TimeList; previous_views = []; input_mode = Normal; form = None; status }
     (* Edit existing entities *)
     | TaskEdit (Some id), Some p, Some form ->
       let title = get_field_value_or form "Title" "" in
@@ -2742,6 +2901,49 @@ let run ~config () =
         let* activities = Storage.Queries.list_activities p in
         let status = Some { text = "Activity updated"; level = `Success; expires_at = None } in
         Lwt.return { model with activities; view = ActivityDetail id; previous_views = []; input_mode = Normal; form = None; status }
+    | TimeEdit (Some id), Some p, Some form ->
+      let description = get_field_value_or form "Description" "" in
+      if description = "" then
+        Lwt.return { model with status = Some { text = "Description is required"; level = `Error; expires_at = None } }
+      else
+        let date = match get_field_value form "Date" with
+          | Some s ->
+            (try
+              let months = [("JAN",1);("FEB",2);("MAR",3);("APR",4);("MAY",5);("JUN",6);
+                            ("JUL",7);("AUG",8);("SEP",9);("OCT",10);("NOV",11);("DEC",12)] in
+              Scanf.sscanf s "%d-%3s-%d" (fun d m y ->
+                let mo = List.assoc (String.uppercase_ascii m) months in
+                match Ptime.of_date (y, mo, d) with
+                | Some t -> t
+                | None -> Ptime_clock.now ())
+            with _ -> Ptime_clock.now ())
+          | None -> Ptime_clock.now ()
+        in
+        let duration_minutes = match get_field_value form "Duration (min)" with
+          | Some s -> (try int_of_string s with _ -> 60)
+          | None -> 60
+        in
+        let billable = match get_field_value form "Billable" with
+          | Some "No" -> false | _ -> true
+        in
+        let rate = match get_field_value form "Rate" with
+          | Some s -> (try Some (float_of_string s) with _ -> None)
+          | None -> None
+        in
+        let currency = get_field_value_or form "Currency" "USD" in
+        let project_id = get_field_value form "Project" in
+        let task_id = get_field_value form "Task" in
+        let company_id = get_field_value form "Company" in
+        let contact_id = get_field_value form "Contact" in
+        let deal_id = get_field_value form "Deal" in
+        let tags = match get_field_value form "Tags" with
+          | Some s -> String.split_on_char ',' s |> List.map String.trim |> List.filter (fun s -> s <> "")
+          | None -> []
+        in
+        let* _result = Storage.Queries.update_time_entry p ~id ~description ~date ?rate ~currency ~duration_minutes ~billable ?project_id ?task_id ?company_id ?contact_id ?deal_id ~tags () in
+        let* time_entries = Storage.Queries.list_time_entries p in
+        let status = Some { text = "Time entry updated"; level = `Success; expires_at = None } in
+        Lwt.return { model with time_entries; view = TimeDetail id; previous_views = []; input_mode = Normal; form = None; status }
     | _ ->
       Lwt.return (Update.update model SubmitInput)
   in
@@ -2809,6 +3011,19 @@ let run ~config () =
          let* activities = Storage.Queries.list_activities p in
          let status = Some { text = "Activity deleted"; level = `Success; expires_at = None } in
          Lwt.return { model with activities; status; selected_index = max 0 (model.selected_index - 1) }
+       | None -> Lwt.return model)
+    | TimeDetail id, Some p ->
+      let* _result = Storage.Queries.delete_time_entry p ~id in
+      let* time_entries = Storage.Queries.list_time_entries p in
+      let status = Some { text = "Time entry deleted"; level = `Success; expires_at = None } in
+      Lwt.return { model with time_entries; view = TimeList; previous_views = []; status }
+    | TimeList, Some p ->
+      (match List.nth_opt model.time_entries model.selected_index with
+       | Some te ->
+         let* _result = Storage.Queries.delete_time_entry p ~id:te.id in
+         let* time_entries = Storage.Queries.list_time_entries p in
+         let status = Some { text = "Time entry deleted"; level = `Success; expires_at = None } in
+         Lwt.return { model with time_entries; status; selected_index = max 0 (model.selected_index - 1) }
        | None -> Lwt.return model)
     | DealList, Some p ->
       (match List.nth_opt model.deals model.selected_index with
@@ -2910,8 +3125,9 @@ let run ~config () =
           let* companies = Storage.Queries.list_companies p in
           let* deals = Storage.Queries.list_deals p in
           let* activities = Storage.Queries.list_activities p in
+          let* time_entries = Storage.Queries.list_time_entries p in
           let status = Some { text = "Day changed - data refreshed"; level = `Info; expires_at = None } in
-          Lwt.return { model with tasks; notes; events; contacts; companies; deals; activities; status }
+          Lwt.return { model with tasks; notes; events; contacts; companies; deals; activities; time_entries; status }
         | None -> Lwt.return model
       end else
         Lwt.return model
@@ -3024,6 +3240,23 @@ let run ~config () =
                 | None -> loop model)
              | None -> loop model)
           | _ -> loop model)
+       | `ASCII 'R', Normal ->
+         (* Refresh all data from database *)
+         (match db_pool with
+          | Some p ->
+            let* tasks = Storage.Queries.list_tasks p in
+            let* notes = Storage.Queries.list_notes p in
+            let* events = Storage.Queries.list_events p in
+            let* contacts = Storage.Queries.list_contacts p in
+            let* companies = Storage.Queries.list_companies p in
+            let* deals = Storage.Queries.list_deals p in
+            let* activities = Storage.Queries.list_activities p in
+            let* time_entries = Storage.Queries.list_time_entries p in
+            let status = Some { text = "Data refreshed"; level = `Success; expires_at = None } in
+            loop { model with tasks; notes; events; contacts; companies; deals; activities; time_entries; status }
+          | None ->
+            let status = Some { text = "No database connection"; level = `Error; expires_at = None } in
+            loop { model with status })
        | `ASCII 'A', Normal ->
          (* Add attachment - prompt for file path *)
          (match model.view with
@@ -3485,5 +3718,5 @@ let run ~config () =
       let* () = Term.release term in
       Lwt.return ()
   in
-  let initial_model = { (Model.init ~device_id) with sync_online; width = init_w; height = init_h; tasks; notes; events; projects; contacts; companies; deals; activities; archived_tasks; archived_notes; archived_events } in
+  let initial_model = { (Model.init ~device_id) with sync_online; width = init_w; height = init_h; tasks; notes; events; projects; contacts; companies; deals; activities; time_entries; archived_tasks; archived_notes; archived_events } in
   loop initial_model

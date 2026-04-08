@@ -175,6 +175,32 @@ CREATE TABLE IF NOT EXISTS contacts (
   sync_deleted INTEGER NOT NULL DEFAULT 0
 );
 
+-- Time entries (billable hours tracking)
+CREATE TABLE IF NOT EXISTS time_entries (
+  id TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  date TEXT NOT NULL,
+  start_time TEXT,
+  end_time TEXT,
+  duration_minutes INTEGER NOT NULL,
+  billable INTEGER NOT NULL DEFAULT 1,
+  rate REAL,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  project_id TEXT REFERENCES projects(id),
+  task_id TEXT REFERENCES tasks(id),
+  deal_id TEXT REFERENCES deals(id),
+  company_id TEXT REFERENCES companies(id),
+  contact_id TEXT REFERENCES contacts(id),
+  tags TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+
 -- Email references (aerc integration)
 CREATE TABLE IF NOT EXISTS email_refs (
   id TEXT PRIMARY KEY,
@@ -259,6 +285,10 @@ CREATE INDEX IF NOT EXISTS idx_activities_contact ON activities(contact_id) WHER
 CREATE INDEX IF NOT EXISTS idx_activities_company ON activities(company_id) WHERE sync_deleted = 0;
 CREATE INDEX IF NOT EXISTS idx_activities_deal ON activities(deal_id) WHERE sync_deleted = 0;
 CREATE INDEX IF NOT EXISTS idx_activities_date ON activities(activity_date) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_time_entries_date ON time_entries(date) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_time_entries_project ON time_entries(project_id) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_time_entries_company ON time_entries(company_id) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_time_entries_billable ON time_entries(billable) WHERE sync_deleted = 0;
 |}
 
 (** PostgreSQL schema (similar but with PostgreSQL-specific types) *)
@@ -424,6 +454,32 @@ CREATE TABLE IF NOT EXISTS contacts (
   sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+-- Time entries (billable hours tracking)
+CREATE TABLE IF NOT EXISTS time_entries (
+  id TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  date TIMESTAMPTZ NOT NULL,
+  start_time TIMESTAMPTZ,
+  end_time TIMESTAMPTZ,
+  duration_minutes INTEGER NOT NULL,
+  billable BOOLEAN NOT NULL DEFAULT TRUE,
+  rate DOUBLE PRECISION,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  project_id TEXT REFERENCES projects(id),
+  task_id TEXT REFERENCES tasks(id),
+  deal_id TEXT REFERENCES deals(id),
+  company_id TEXT REFERENCES companies(id),
+  contact_id TEXT REFERENCES contacts(id),
+  tags JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ NOT NULL,
+  -- Sync metadata
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
 -- Email references (aerc integration)
 CREATE TABLE IF NOT EXISTS email_refs (
   id TEXT PRIMARY KEY,
@@ -495,17 +551,75 @@ CREATE INDEX IF NOT EXISTS idx_activities_contact ON activities(contact_id) WHER
 CREATE INDEX IF NOT EXISTS idx_activities_company ON activities(company_id) WHERE NOT sync_deleted;
 CREATE INDEX IF NOT EXISTS idx_activities_deal ON activities(deal_id) WHERE NOT sync_deleted;
 CREATE INDEX IF NOT EXISTS idx_activities_date ON activities(activity_date) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_time_entries_date ON time_entries(date) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_time_entries_project ON time_entries(project_id) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_time_entries_company ON time_entries(company_id) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_time_entries_billable ON time_entries(billable) WHERE NOT sync_deleted;
 |}
 
 (** Migration SQL for adding time blocking columns to existing databases *)
 let sqlite_migrations = {|
 ALTER TABLE tasks ADD COLUMN block_start TEXT;
-ALTER TABLE tasks ADD COLUMN block_end TEXT
+ALTER TABLE tasks ADD COLUMN block_end TEXT;
+CREATE TABLE IF NOT EXISTS time_entries (
+  id TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  date TEXT NOT NULL,
+  start_time TEXT,
+  end_time TEXT,
+  duration_minutes INTEGER NOT NULL,
+  billable INTEGER NOT NULL DEFAULT 1,
+  rate REAL,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  project_id TEXT REFERENCES projects(id),
+  task_id TEXT REFERENCES tasks(id),
+  deal_id TEXT REFERENCES deals(id),
+  company_id TEXT REFERENCES companies(id),
+  contact_id TEXT REFERENCES contacts(id),
+  tags TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TEXT NOT NULL,
+  sync_synced_at TEXT,
+  sync_deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_time_entries_date ON time_entries(date) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_time_entries_project ON time_entries(project_id) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_time_entries_company ON time_entries(company_id) WHERE sync_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_time_entries_billable ON time_entries(billable) WHERE sync_deleted = 0
 |}
 
 let postgres_migrations = {|
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS block_start TIMESTAMPTZ;
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS block_end TIMESTAMPTZ
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS block_end TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS time_entries (
+  id TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  date TIMESTAMPTZ NOT NULL,
+  start_time TIMESTAMPTZ,
+  end_time TIMESTAMPTZ,
+  duration_minutes INTEGER NOT NULL,
+  billable BOOLEAN NOT NULL DEFAULT TRUE,
+  rate DOUBLE PRECISION,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  project_id TEXT REFERENCES projects(id),
+  task_id TEXT REFERENCES tasks(id),
+  deal_id TEXT REFERENCES deals(id),
+  company_id TEXT REFERENCES companies(id),
+  contact_id TEXT REFERENCES contacts(id),
+  tags JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ NOT NULL,
+  sync_local_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL DEFAULT 1,
+  sync_modified_at TIMESTAMPTZ NOT NULL,
+  sync_synced_at TIMESTAMPTZ,
+  sync_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS idx_time_entries_date ON time_entries(date) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_time_entries_project ON time_entries(project_id) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_time_entries_company ON time_entries(company_id) WHERE NOT sync_deleted;
+CREATE INDEX IF NOT EXISTS idx_time_entries_billable ON time_entries(billable) WHERE NOT sync_deleted
 |}
 
 (** Run schema migration on a connection *)

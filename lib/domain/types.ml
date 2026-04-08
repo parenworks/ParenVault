@@ -211,6 +211,27 @@ type activity = {
   sync: sync_meta;
 }
 
+(** A time entry for billable hours tracking *)
+type time_entry = {
+  id: uuid;
+  description: string;
+  date: timestamp;
+  start_time: timestamp option;
+  end_time: timestamp option;
+  duration_minutes: int;
+  billable: bool;
+  rate: float option;
+  currency: string;
+  project_id: uuid option;
+  task_id: uuid option;
+  deal_id: uuid option;
+  company_id: uuid option;
+  contact_id: uuid option;
+  tags: tag list;
+  created_at: timestamp;
+  sync: sync_meta;
+}
+
 (** Email message reference (for aerc integration) *)
 type email_ref = {
   id: uuid;

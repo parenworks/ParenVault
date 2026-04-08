@@ -29,6 +29,9 @@ type view =
   | ActivityList
   | ActivityDetail of uuid
   | ActivityEdit of uuid option  (** None = new activity *)
+  | TimeList
+  | TimeDetail of uuid
+  | TimeEdit of uuid option  (** None = new time entry *)
   | Inbox
   | Archive
   | WeeklyReview
@@ -80,6 +83,7 @@ type model = {
   companies: company list;
   deals: deal list;
   activities: activity list;
+  time_entries: Domain.Types.time_entry list;
   
   (* Archived/deleted items *)
   archived_tasks: task list;
@@ -137,6 +141,7 @@ let init ~device_id =
     companies = [];
     deals = [];
     activities = [];
+    time_entries = [];
     archived_tasks = [];
     archived_notes = [];
     archived_events = [];
@@ -242,6 +247,7 @@ let current_items model =
   | CompanyList -> List.length model.companies
   | DealList -> List.length model.deals
   | ActivityList -> List.length model.activities
+  | TimeList -> List.length model.time_entries
   | Inbox -> 
     List.filter (fun (t : Domain.Types.task) -> t.status = Domain.Types.Inbox) model.tasks |> List.length
   | Archive ->

@@ -138,6 +138,14 @@ let update model msg =
             previous_views = model.view :: model.previous_views;
           }
         | None -> model)
+     | TimeList ->
+       (match List.nth_opt model.time_entries model.selected_index with
+        | Some te ->
+          { model with
+            view = TimeDetail te.id;
+            previous_views = model.view :: model.previous_views;
+          }
+        | None -> model)
      | _ -> model)
   
   | QuickCapture ->
@@ -367,6 +375,31 @@ let update model msg =
          input_mode = Insert;
          form = Some form;
        }
+     | TimeList ->
+       let form = {
+         fields = [
+           { name = "Description"; value = ""; field_type = `Text };
+           { name = "Date"; value = ""; field_type = `Date };
+           { name = "Duration (min)"; value = "60"; field_type = `Text };
+           { name = "Billable"; value = "Yes"; field_type = `Select ["Yes"; "No"] };
+           { name = "Rate"; value = ""; field_type = `Text };
+           { name = "Currency"; value = "USD"; field_type = `Text };
+           { name = "Project"; value = ""; field_type = `Text };
+           { name = "Task"; value = ""; field_type = `Text };
+           { name = "Company"; value = ""; field_type = `Text };
+           { name = "Contact"; value = ""; field_type = `Text };
+           { name = "Deal"; value = ""; field_type = `Text };
+           { name = "Tags"; value = ""; field_type = `Text };
+         ];
+         focused_field = 0;
+         entity_id = None;
+       } in
+       { model with
+         view = TimeEdit None;
+         previous_views = model.view :: model.previous_views;
+         input_mode = Insert;
+         form = Some form;
+       }
      | _ -> model)
   
   | EditSelected ->
@@ -538,6 +571,36 @@ let update model msg =
             entity_id = Some id;
           } in
           { model with view = ActivityEdit (Some id); input_mode = Insert; form = Some form }
+        | None -> model)
+     | TimeDetail id ->
+       (match List.find_opt (fun (te : Domain.Types.time_entry) -> te.id = id) model.time_entries with
+        | Some te ->
+          let months = [|"JAN";"FEB";"MAR";"APR";"MAY";"JUN";"JUL";"AUG";"SEP";"OCT";"NOV";"DEC"|] in
+          let date_val =
+            let (y, m, d) = Ptime.to_date te.date.Domain.Types.time in
+            Printf.sprintf "%02d-%s-%04d" d months.(m - 1) y
+          in
+          let dur_str = string_of_int te.duration_minutes in
+          let rate_str = match te.rate with Some r -> Printf.sprintf "%.2f" r | None -> "" in
+          let form = {
+            fields = [
+              { name = "Description"; value = te.description; field_type = `Text };
+              { name = "Date"; value = date_val; field_type = `Date };
+              { name = "Duration (min)"; value = dur_str; field_type = `Text };
+              { name = "Billable"; value = (if te.billable then "Yes" else "No"); field_type = `Select ["Yes"; "No"] };
+              { name = "Rate"; value = rate_str; field_type = `Text };
+              { name = "Currency"; value = te.currency; field_type = `Text };
+              { name = "Project"; value = Option.value ~default:"" te.project_id; field_type = `Text };
+              { name = "Task"; value = Option.value ~default:"" te.task_id; field_type = `Text };
+              { name = "Company"; value = Option.value ~default:"" te.company_id; field_type = `Text };
+              { name = "Contact"; value = Option.value ~default:"" te.contact_id; field_type = `Text };
+              { name = "Deal"; value = Option.value ~default:"" te.deal_id; field_type = `Text };
+              { name = "Tags"; value = String.concat ", " te.tags; field_type = `Text };
+            ];
+            focused_field = 0;
+            entity_id = Some id;
+          } in
+          { model with view = TimeEdit (Some id); input_mode = Insert; form = Some form }
         | None -> model)
      | _ -> model)
   
