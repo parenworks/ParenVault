@@ -161,7 +161,7 @@ let upsert_task_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 strin
      project_id = excluded.project_id, parent_id = excluded.parent_id,
      block_start = excluded.block_start, block_end = excluded.block_end,
      sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted,
-     sync_version = sync_version + 1"
+     sync_version = COALESCE(excluded.sync_version, 1)"
 
 let upsert_task pool (task : task) =
   let status_str = task_status_to_string task.status in
@@ -176,7 +176,7 @@ let upsert_task pool (task : task) =
   ) in
   match result with
   | Ok () -> Lwt.return true
-  | Error _ -> Lwt.return false
+  | Error e -> Printf.eprintf "upsert_task error: %s\n%!" (Caqti_error.show e); Lwt.return false
 
 (* ============================================
    NOTE QUERIES
@@ -248,7 +248,7 @@ let upsert_note_query = Q.(T.(t2 string (t2 string (t2 string (t2 string (t2 (op
    ON CONFLICT(id) DO UPDATE SET 
      title = excluded.title, content = excluded.content, tags = excluded.tags,
      project_id = excluded.project_id, sync_modified_at = excluded.sync_modified_at, 
-     sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+     sync_deleted = excluded.sync_deleted, sync_version = COALESCE(excluded.sync_version, 1)"
 
 let upsert_note pool (note : note) =
   let tags_json = `List (List.map (fun t -> `String t) note.tags) |> Yojson.Safe.to_string in
@@ -257,7 +257,7 @@ let upsert_note pool (note : note) =
   ) in
   match result with
   | Ok () -> Lwt.return true
-  | Error _ -> Lwt.return false
+  | Error e -> Printf.eprintf "upsert_note error: %s\n%!" (Caqti_error.show e); Lwt.return false
 
 let insert_note_query = Q.(T.(t2 string (t2 string (t2 string (t2 string (t2 (option string) (t2 ptime (t2 string ptime))))))) ->. T.unit)
   "INSERT INTO notes (id, title, content, tags, project_id, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)"
@@ -373,7 +373,7 @@ let upsert_event_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 ptim
      title = excluded.title, description = excluded.description, start_time = excluded.start_time,
      end_time = excluded.end_time, location = excluded.location, tags = excluded.tags,
      recurrence = excluded.recurrence, sync_modified_at = excluded.sync_modified_at, 
-     sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+     sync_deleted = excluded.sync_deleted, sync_version = COALESCE(excluded.sync_version, 1)"
 
 let upsert_event pool (event : event) =
   let tags_json = `List (List.map (fun t -> `String t) event.tags) |> Yojson.Safe.to_string in
@@ -383,7 +383,7 @@ let upsert_event pool (event : event) =
   ) in
   match result with
   | Ok () -> Lwt.return true
-  | Error _ -> Lwt.return false
+  | Error e -> Printf.eprintf "upsert_event error: %s\n%!" (Caqti_error.show e); Lwt.return false
 
 let insert_event_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 ptime (t2 (option ptime) (t2 (option string) (t2 string (t2 (option string) (t2 ptime (t2 string ptime)))))))))) ->. T.unit)
   "INSERT INTO events (id, title, description, start_time, end_time, location, tags, recurrence, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
@@ -493,6 +493,34 @@ let delete_contact pool ~id =
   | Ok () -> Lwt.return true
   | Error _ -> Lwt.return false
 
+let list_deleted_contacts_query = Q.(T.unit ->* contact_row_type)
+  "SELECT id, name, email, phone, notes, tags, created_at FROM contacts WHERE sync_deleted ORDER BY name ASC"
+
+let list_deleted_contacts pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_deleted_contacts_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map (fun row -> let c = contact_of_row row in { c with sync = { c.sync with deleted = true } }) rows)
+  | Error _ -> Lwt.return []
+
+let upsert_contact_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 string (t2 ptime (t2 string (t2 ptime bool))))))))) ->. T.unit)
+  "INSERT INTO contacts (id, name, email, phone, notes, tags, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     name = excluded.name, email = excluded.email, phone = excluded.phone,
+     notes = excluded.notes, tags = excluded.tags, sync_modified_at = excluded.sync_modified_at, 
+     sync_deleted = excluded.sync_deleted, sync_version = COALESCE(excluded.sync_version, 1)"
+
+let upsert_contact pool (contact : contact) =
+  let tags_json = `List (List.map (fun t -> `String t) contact.tags) |> Yojson.Safe.to_string in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_contact_query (contact.id, (contact.name, (contact.email, (contact.phone, (contact.notes, (tags_json, (contact.created_at.time, (contact.sync.local_id, (contact.sync.modified_at.time, contact.sync.deleted)))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error e -> Printf.eprintf "upsert_contact error: %s\n%!" (Caqti_error.show e); Lwt.return false
+
 (* ============================================
    COMPANY QUERIES
    ============================================ *)
@@ -572,7 +600,18 @@ let upsert_company_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 (o
      name = excluded.name, website = excluded.website, industry = excluded.industry,
      address = excluded.address, phone = excluded.phone, email = excluded.email,
      notes = excluded.notes, tags = excluded.tags, sync_modified_at = excluded.sync_modified_at, 
-     sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+     sync_deleted = excluded.sync_deleted, sync_version = COALESCE(excluded.sync_version, 1)"
+
+let list_deleted_companies_query = Q.(T.unit ->* company_row_type)
+  "SELECT id, name, website, industry, address, phone, email, notes, tags, created_at FROM companies WHERE sync_deleted ORDER BY name ASC"
+
+let list_deleted_companies pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_deleted_companies_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map (fun row -> let c = company_of_row row in { c with sync = { c.sync with deleted = true } }) rows)
+  | Error _ -> Lwt.return []
 
 let upsert_company pool (company : company) =
   let tags_json = `List (List.map (fun t -> `String t) company.tags) |> Yojson.Safe.to_string in
@@ -581,7 +620,7 @@ let upsert_company pool (company : company) =
   ) in
   match result with
   | Ok () -> Lwt.return true
-  | Error _ -> Lwt.return false
+  | Error e -> Printf.eprintf "upsert_company error: %s\n%!" (Caqti_error.show e); Lwt.return false
 
 (* ============================================
    DEAL QUERIES
@@ -666,7 +705,18 @@ let upsert_deal_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 (opti
      name = excluded.name, company_id = excluded.company_id, contact_id = excluded.contact_id,
      stage = excluded.stage, value = excluded.value, currency = excluded.currency,
      expected_close_date = excluded.expected_close_date, notes = excluded.notes, tags = excluded.tags,
-     sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+     sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted, sync_version = COALESCE(excluded.sync_version, 1)"
+
+let list_deleted_deals_query = Q.(T.unit ->* deal_row_type)
+  "SELECT id, name, company_id, contact_id, stage, value, currency, expected_close_date, notes, tags, created_at FROM deals WHERE sync_deleted ORDER BY created_at DESC"
+
+let list_deleted_deals pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_deleted_deals_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map (fun row -> let d = deal_of_row row in { d with sync = { d.sync with deleted = true } }) rows)
+  | Error _ -> Lwt.return []
 
 let upsert_deal pool (deal : Domain.Types.deal) =
   let tags_json = `List (List.map (fun t -> `String t) deal.tags) |> Yojson.Safe.to_string in
@@ -677,7 +727,7 @@ let upsert_deal pool (deal : Domain.Types.deal) =
   ) in
   match result with
   | Ok () -> Lwt.return true
-  | Error _ -> Lwt.return false
+  | Error e -> Printf.eprintf "upsert_deal error: %s\n%!" (Caqti_error.show e); Lwt.return false
 
 (* ============================================
    ACTIVITY QUERIES
@@ -768,7 +818,18 @@ let upsert_activity_query = Q.(T.(t2 string (t2 string (t2 string (t2 (option st
      kind = excluded.kind, subject = excluded.subject, description = excluded.description,
      contact_id = excluded.contact_id, company_id = excluded.company_id, deal_id = excluded.deal_id,
      activity_date = excluded.activity_date, duration_minutes = excluded.duration_minutes, tags = excluded.tags,
-     sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+     sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted, sync_version = COALESCE(excluded.sync_version, 1)"
+
+let list_all_activities_query = Q.(T.unit ->* activity_row_type)
+  "SELECT id, kind, subject, description, contact_id, company_id, deal_id, activity_date, duration_minutes, tags, created_at, sync_local_id, sync_modified_at, sync_synced_at, sync_deleted FROM activities ORDER BY activity_date DESC"
+
+let list_all_activities pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_all_activities_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map activity_of_row rows)
+  | Error _ -> Lwt.return []
 
 let upsert_activity pool (activity : Domain.Types.activity) =
   let tags_json = `List (List.map (fun t -> `String t) activity.tags) |> Yojson.Safe.to_string in
@@ -778,7 +839,7 @@ let upsert_activity pool (activity : Domain.Types.activity) =
   ) in
   match result with
   | Ok () -> Lwt.return true
-  | Error _ -> Lwt.return false
+  | Error e -> Printf.eprintf "upsert_activity error: %s\n%!" (Caqti_error.show e); Lwt.return false
 
 (* ============================================
    PROJECT QUERIES
@@ -817,6 +878,35 @@ let list_projects pool =
 
 let insert_project_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 (option string) (t2 ptime (t2 string ptime)))))))) ->. T.unit)
   "INSERT INTO projects (id, name, description, status, tags, parent_id, created_at, sync_local_id, sync_version, sync_modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
+
+let list_deleted_projects_query = Q.(T.unit ->* project_row_type)
+  "SELECT id, name, description, status, tags, parent_id, created_at FROM projects WHERE sync_deleted ORDER BY name ASC"
+
+let list_deleted_projects pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_deleted_projects_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map (fun row -> let p = project_of_row row in { p with sync = { p.sync with deleted = true } }) rows)
+  | Error _ -> Lwt.return []
+
+let upsert_project_query = Q.(T.(t2 string (t2 string (t2 (option string) (t2 string (t2 string (t2 (option string) (t2 ptime (t2 string (t2 ptime bool))))))))) ->. T.unit)
+  "INSERT INTO projects (id, name, description, status, tags, parent_id, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     name = excluded.name, description = excluded.description, status = excluded.status,
+     tags = excluded.tags, parent_id = excluded.parent_id, sync_modified_at = excluded.sync_modified_at, 
+     sync_deleted = excluded.sync_deleted, sync_version = COALESCE(excluded.sync_version, 1)"
+
+let upsert_project pool (project : Domain.Types.project) =
+  let tags_json = `List (List.map (fun t -> `String t) project.tags) |> Yojson.Safe.to_string in
+  let status_str = match project.status with `Active -> "active" | `Archived -> "archived" | `Someday -> "someday" in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_project_query (project.id, (project.name, (project.description, (status_str, (tags_json, (project.parent_id, (project.created_at.time, (project.sync.local_id, (project.sync.modified_at.time, project.sync.deleted)))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error e -> Printf.eprintf "upsert_project error: %s\n%!" (Caqti_error.show e); Lwt.return false
 
 let create_project pool ~name ?description ?(status="active") ?(tags=[]) ?parent_id () =
   let id = new_uuid () in
@@ -977,7 +1067,7 @@ let upsert_link_query = Q.(T.(t2 string (t2 string (t2 string (t2 string (t2 str
      source_type = excluded.source_type, source_id = excluded.source_id,
      target_type = excluded.target_type, target_id = excluded.target_id,
      link_type = excluded.link_type, sync_modified_at = excluded.sync_modified_at, 
-     sync_deleted = excluded.sync_deleted, sync_version = sync_version + 1"
+     sync_deleted = excluded.sync_deleted, sync_version = COALESCE(excluded.sync_version, 1)"
 
 (* ---- Time Entries ---- *)
 
@@ -1072,10 +1162,43 @@ let list_time_entries_range pool ~from_date ~to_date =
   | Ok rows -> Lwt.return (List.map time_entry_of_row rows)
   | Error _ -> Lwt.return []
 
+let list_all_time_entries_query = Q.(T.unit ->* time_entry_row_type)
+  "SELECT id, description, date, start_time, end_time, duration_minutes, billable, rate, currency, project_id, task_id, deal_id, company_id, contact_id, tags, created_at, sync_local_id, sync_modified_at, sync_synced_at, sync_deleted FROM time_entries ORDER BY date DESC"
+
+let list_all_time_entries pool =
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.collect_list list_all_time_entries_query ()
+  ) in
+  match result with
+  | Ok rows -> Lwt.return (List.map time_entry_of_row rows)
+  | Error _ -> Lwt.return []
+
+let upsert_time_entry_query = Q.(T.(t2 string (t2 string (t2 ptime (t2 (option ptime) (t2 (option ptime) (t2 int (t2 bool (t2 (option float) (t2 string (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 (option string) (t2 string (t2 ptime (t2 string (t2 ptime bool)))))))))))))))))) ->. T.unit)
+  "INSERT INTO time_entries (id, description, date, start_time, end_time, duration_minutes, billable, rate, currency, project_id, task_id, deal_id, company_id, contact_id, tags, created_at, sync_local_id, sync_modified_at, sync_deleted, sync_version) 
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(id) DO UPDATE SET 
+     description = excluded.description, date = excluded.date, start_time = excluded.start_time,
+     end_time = excluded.end_time, duration_minutes = excluded.duration_minutes, billable = excluded.billable,
+     rate = excluded.rate, currency = excluded.currency, project_id = excluded.project_id,
+     task_id = excluded.task_id, deal_id = excluded.deal_id, company_id = excluded.company_id,
+     contact_id = excluded.contact_id, tags = excluded.tags,
+     sync_modified_at = excluded.sync_modified_at, sync_deleted = excluded.sync_deleted, sync_version = COALESCE(excluded.sync_version, 1)"
+
+let upsert_time_entry pool (te : Domain.Types.time_entry) =
+  let tags_json = `List (List.map (fun t -> `String t) te.tags) |> Yojson.Safe.to_string in
+  let start_time = Option.map (fun (ts : Domain.Types.timestamp) -> ts.time) te.start_time in
+  let end_time = Option.map (fun (ts : Domain.Types.timestamp) -> ts.time) te.end_time in
+  let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
+    C.exec upsert_time_entry_query (te.id, (te.description, (te.date.time, (start_time, (end_time, (te.duration_minutes, (te.billable, (te.rate, (te.currency, (te.project_id, (te.task_id, (te.deal_id, (te.company_id, (te.contact_id, (tags_json, (te.created_at.time, (te.sync.local_id, (te.sync.modified_at.time, te.sync.deleted))))))))))))))))))
+  ) in
+  match result with
+  | Ok () -> Lwt.return true
+  | Error e -> Printf.eprintf "upsert_time_entry error: %s\n%!" (Caqti_error.show e); Lwt.return false
+
 let upsert_link pool (link : Domain.Types.link) =
   let* result = Db.with_pool pool (fun (module C : Caqti_lwt.CONNECTION) ->
     C.exec upsert_link_query (link.id, (link.source_type, (link.source_id, (link.target_type, (link.target_id, (link.link_type, (link.created_at.time, (link.sync.local_id, (link.sync.modified_at.time, link.sync.deleted)))))))))
   ) in
   match result with
   | Ok () -> Lwt.return true
-  | Error _ -> Lwt.return false
+  | Error e -> Printf.eprintf "upsert_link error: %s\n%!" (Caqti_error.show e); Lwt.return false

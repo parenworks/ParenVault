@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS contacts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT,
+  phone TEXT,
   notes TEXT,
   tags TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
@@ -443,6 +444,7 @@ CREATE TABLE IF NOT EXISTS contacts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT,
+  phone TEXT,
   notes TEXT,
   tags JSONB NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ NOT NULL,
@@ -561,6 +563,7 @@ CREATE INDEX IF NOT EXISTS idx_time_entries_billable ON time_entries(billable) W
 let sqlite_migrations = {|
 ALTER TABLE tasks ADD COLUMN block_start TEXT;
 ALTER TABLE tasks ADD COLUMN block_end TEXT;
+ALTER TABLE contacts ADD COLUMN phone TEXT;
 CREATE TABLE IF NOT EXISTS time_entries (
   id TEXT PRIMARY KEY,
   description TEXT NOT NULL,
@@ -593,6 +596,7 @@ CREATE INDEX IF NOT EXISTS idx_time_entries_billable ON time_entries(billable) W
 let postgres_migrations = {|
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS block_start TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS block_end TIMESTAMPTZ;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS phone TEXT;
 CREATE TABLE IF NOT EXISTS time_entries (
   id TEXT PRIMARY KEY,
   description TEXT NOT NULL,

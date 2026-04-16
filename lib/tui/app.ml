@@ -2075,7 +2075,7 @@ let handle_key model key =
          `Continue (update model (ToggleSubtaskStatus task_id))
      | _ -> `Continue (update model ToggleTaskStatus))
   | `ASCII 's' when model.input_mode = Normal -> 
-    `Continue (update model TriggerSync)
+    `Sync model
   | `ASCII '/' when model.input_mode = Normal -> 
     `Continue (update model StartSearch)
   | `ASCII '1' when model.input_mode = Normal -> 
@@ -2362,19 +2362,21 @@ let handle_key model key =
 (** Main application loop *)
 let run ~config () =
   let device_id = config.Config.device_id in
-  (* Initialize local database first for fast startup *)
+  (* Initialize database with remote URI for sync *)
+  let remote_uri = Config.postgres_uri config in
   let* db_ctx = 
-    Storage.Db.init ~local_path:config.Config.db.local_path ()
+    Storage.Db.init ~local_path:config.Config.db.local_path ?remote_uri ()
   in
-  let pool = match db_ctx with
-    | Ok ctx -> Some (Storage.Db.local ctx)
-    | Error _ -> None
+  let db_ctx_ref = ref (match db_ctx with Ok ctx -> Some ctx | Error _ -> None) in
+  let pool = match !db_ctx_ref with
+    | Some ctx -> Some (Storage.Db.local ctx)
+    | None -> None
   in
-  (* Load from local immediately, connect to remote in background *)
   let db_pool = pool in
-  (* Remote sync is deferred - user triggers with 's' key to avoid
-     blocking the Lwt event loop with unreachable hosts *)
-  let sync_online = false in
+  let sync_online = match !db_ctx_ref with
+    | Some ctx -> Storage.Db.remote ctx <> None
+    | None -> false
+  in
   (* Load initial data from database *)
   let* tasks = match db_pool with
     | Some p -> Storage.Queries.list_tasks p
@@ -3849,6 +3851,58 @@ let run ~config () =
                loop { model with view = prev; previous_views = rest; selected_index = 0 }
              | [], _ ->
                loop { model with view = Dashboard; selected_index = 0 })
+          | `Sync model ->
+            (* Real bidirectional sync with remote PostgreSQL *)
+            (match !db_ctx_ref with
+             | Some ctx ->
+               (match Storage.Db.remote ctx with
+                | Some remote_pool ->
+                  let local_pool = Storage.Db.local ctx in
+                  let status_syncing = Some { Model.text = "Syncing..."; level = `Info; expires_at = None } in
+                  let syncing_model = { model with status = status_syncing } in
+                  let (w, h) = Term.size term in
+                  let img = (try render syncing_model (w, h) with _ -> I.string A.(fg yellow) "Syncing...") in
+                  let* () = Term.image term img in
+                  let* sync_result =
+                    Lwt.catch
+                      (fun () ->
+                        let* () = Storage.Sync.run ~local_pool ~remote_pool in
+                        Lwt.return (Ok ()))
+                      (fun exn -> Lwt.return (Error (Printexc.to_string exn)))
+                  in
+                  (match sync_result with
+                   | Ok () ->
+                     (* Reload all data from local DB after sync *)
+                     let* tasks = Storage.Queries.list_tasks local_pool in
+                     let* notes = Storage.Queries.list_notes local_pool in
+                     let* events = Storage.Queries.list_events local_pool in
+                     let* projects = Storage.Queries.list_projects local_pool in
+                     let* contacts = Storage.Queries.list_contacts local_pool in
+                     let* companies = Storage.Queries.list_companies local_pool in
+                     let* deals = Storage.Queries.list_deals local_pool in
+                     let* activities = Storage.Queries.list_activities local_pool in
+                     let* time_entries = Storage.Queries.list_time_entries local_pool in
+                     let* archived_tasks = Storage.Queries.list_deleted_tasks local_pool in
+                     let* archived_notes = Storage.Queries.list_deleted_notes local_pool in
+                     let* archived_events = Storage.Queries.list_deleted_events local_pool in
+                     let now = Ptime_clock.now () in
+                     let status = Some { Model.text = "Sync completed"; level = `Success; expires_at = None } in
+                     loop { model with tasks; notes; events; projects; contacts; companies; deals; activities; time_entries; archived_tasks; archived_notes; archived_events; last_sync = Some now; sync_online = true; status }
+                   | Error msg ->
+                     let status = Some { Model.text = "Sync failed: " ^ msg; level = `Error; expires_at = None } in
+                     loop { model with status })
+                | None ->
+                  (* Remote not available - try to reconnect *)
+                  let* available = Storage.Db.refresh_remote_status ctx in
+                  if available then
+                    let status = Some { Model.text = "Remote reconnected - press 's' again to sync"; level = `Info; expires_at = None } in
+                    loop { model with sync_online = true; status }
+                  else
+                    let status = Some { Model.text = "Remote database not available"; level = `Warning; expires_at = None } in
+                    loop { model with sync_online = false; status })
+             | None ->
+               let status = Some { Model.text = "No database connection"; level = `Error; expires_at = None } in
+               loop { model with status })
           | `Continue new_model -> loop new_model))
     | Some (`Resize (w, h)) ->
       loop (Update.update model (Resize (w, h)))
